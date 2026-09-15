@@ -424,3 +424,216 @@ function BigSpark({ points, color }) {
   const min = Math.min(...points), max = Math.max(...points);
   const range = max - min || 1;
   const path = points.map((p, i) => `${(i / (points.length - 1)) * w},${h - ((p - min) / range) * (h - 10) - 5}`).join(" ");
+  const area = `0,${h} ${path} ${w},${h}`;
+  return <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={130} preserveAspectRatio="none"><polygon points={area} fill={color} opacity="0.08" /><polyline points={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+}
+
+function LiveTicker() {
+  const [live, setLive] = useState(() => Object.fromEntries(STOCK_UNIVERSE.map((s) => [s.t, { p: PRICES[s.t][PRICES[s.t].length - 1], dir: 0 }])));
+  useEffect(() => {
+    const id = setInterval(() => {
+      setLive((prev) => {
+        const next = {};
+        STOCK_UNIVERSE.forEach((s) => {
+          const cur = prev[s.t].p;
+          const j = (Math.random() - 0.5) * cur * 0.006;
+          next[s.t] = { p: Math.max(0.5, cur + j), dir: j >= 0 ? 1 : -1 };
+        });
+        return next;
+      });
+    }, 1200);
+    return () => clearInterval(id);
+  }, []);
+  const row = [...STOCK_UNIVERSE, ...STOCK_UNIVERSE];
+  return (
+    <div style={{ position: "relative", overflow: "hidden", borderBottom: "1px solid rgba(15,20,18,0.1)", background: "#10201C" }}>
+      <div className="ay-track" style={{ padding: "8px 0" }}>
+        {row.map((s, i) => {
+          const d = live[s.t];
+          return (
+            <span key={i} className="ay-mono" style={{ display: "inline-flex", alignItems: "baseline", gap: 6, padding: "0 20px", fontSize: 12, color: "#F2F0E8", borderRight: "1px solid rgba(242,240,232,0.14)" }}>
+              <b>{s.t}</b>
+              <span style={{ color: d.dir >= 0 ? "#6FCB9F" : "#E38A7D", transition: "color 0.4s" }}>{d.p.toFixed(2)}</span>
+              <span style={{ color: d.dir >= 0 ? "#6FCB9F" : "#E38A7D" }}>{d.dir >= 0 ? "▲" : "▼"}</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const WATCH = ["NVDA", "TSLA", "JPM"];
+function LivePanel({ onEnter }) {
+  const index = useLiveSeries(100, 36, 800);
+  const w1 = useLiveSeries(PRICES.NVDA[PRICES.NVDA.length - 1], 20, 1000);
+  const w2 = useLiveSeries(PRICES.TSLA[PRICES.TSLA.length - 1], 20, 1050);
+  const w3 = useLiveSeries(PRICES.JPM[PRICES.JPM.length - 1], 20, 1100);
+  const series = { NVDA: w1, TSLA: w2, JPM: w3 };
+  const indexUp = index[index.length - 1] >= index[0];
+  return (
+    <div style={{ background: "#10201C", color: "#F2F0E8", padding: "26px 26px 20px" }}>
+      <div className="ay-sans" style={{ display: "flex", justifyContent: "space-between", fontSize: 11, letterSpacing: "1px", color: "#9FB3A8", marginBottom: 6 }}>
+        <span>SIMULATED INDEX</span>
+        <span style={{ color: indexUp ? "#6FCB9F" : "#E38A7D" }}>{indexUp ? "▲" : "▼"} {Math.abs(index[index.length - 1] - index[0]).toFixed(2)}</span>
+      </div>
+      <div className="ay-mono" style={{ fontSize: 30, fontWeight: 600, marginBottom: 4 }}>{index[index.length - 1].toFixed(2)}</div>
+      <BigSpark points={index} color={indexUp ? "#6FCB9F" : "#E38A7D"} />
+      <div style={{ borderTop: "1px solid rgba(242,240,232,0.12)", marginTop: 8, paddingTop: 14 }}>
+        {WATCH.map((t) => {
+          const arr = series[t];
+          const up = arr[arr.length - 1] >= arr[0];
+          const info = STOCK_UNIVERSE.find((u) => u.t === t);
+          return (
+            <div key={t} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 0" }}>
+              <div className="ay-sans" style={{ fontSize: 12.5 }}><b>{t}</b> <span style={{ color: "#9FB3A8" }}>{info.name}</span></div>
+              <RowSpark points={arr} color={up ? "#6FCB9F" : "#E38A7D"} />
+              <div className="ay-mono" style={{ fontSize: 13, width: 60, textAlign: "right", color: up ? "#6FCB9F" : "#E38A7D" }}>{arr[arr.length - 1].toFixed(2)}</div>
+            </div>
+          );
+        })}
+      </div>
+      <button className="ay-btn2" type="button" onClick={onEnter} style={{ marginTop: 16, width: "100%" }}>OPEN THE TERMINAL →</button>
+    </div>
+  );
+}
+
+const INDICES = [
+  { name: "US 500", p: 5812 }, { name: "TECH 100", p: 20140 }, { name: "EURO STX", p: 4980 },
+  { name: "SEMIS", p: 4870 }, { name: "ENERGY", p: 690 }, { name: "CRYPTO PX", p: 61200 },
+];
+function IndexCard({ idx }) {
+  const series = useLiveSeries(idx.p, 26, 900 + Math.random() * 300);
+  const up = series[series.length - 1] >= series[0];
+  const pct = ((series[series.length - 1] - series[0]) / series[0]) * 100;
+  return (
+    <div style={{ border: "1px solid rgba(20,32,27,0.12)", padding: "14px 16px", background: "rgba(255,255,255,0.55)" }}>
+      <div className="ay-sans" style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, letterSpacing: "0.5px", color: "#5C6B62" }}>
+        <span>{idx.name}</span><span style={{ color: up ? "#1F6F5C" : "#A6321B" }}>{up ? "+" : ""}{pct.toFixed(2)}%</span>
+      </div>
+      <div className="ay-mono" style={{ fontSize: 18, fontWeight: 600, margin: "3px 0" }}>{series[series.length - 1].toFixed(series[series.length - 1] > 1000 ? 0 : 2)}</div>
+      <RowSpark points={series} color={up ? "#1F6F5C" : "#A6321B"} />
+    </div>
+  );
+}
+function HeatTile({ name }) {
+  const v = useLiveValue(1100 + Math.random() * 500);
+  const bg = v >= 0 ? `rgba(31,111,92,${0.15 + v * 0.55})` : `rgba(166,50,27,${0.15 + -v * 0.55})`;
+  return (
+    <div style={{ background: bg, padding: "12px 8px", textAlign: "center", transition: "background 0.6s ease" }}>
+      <div className="ay-sans" style={{ fontSize: 10.5, color: "#14201B" }}>{name}</div>
+      <div className="ay-mono" style={{ fontSize: 12.5, fontWeight: 600, color: "#14201B" }}>{v >= 0 ? "+" : ""}{(v * 2.4).toFixed(2)}%</div>
+    </div>
+  );
+}
+const SECTORS = ["Tech", "Financials", "Energy", "Healthcare", "Consumer", "Industrials", "Semis", "Comm.", "Defensive", "Autos"];
+
+/* =============================== NAV ==================================== */
+
+function Nav({ view, setView, user, onSignIn }) {
+  return (
+    <div className="ay-nav" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 40px", borderBottom: "1px solid rgba(20,32,27,0.1)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer" }} onClick={() => setView("landing")}>
+        <span style={{ width: 8, height: 8, background: "#1F6F5C", display: "inline-block" }} />
+        <span className="ay-disp" style={{ fontSize: 19, fontWeight: 600 }}>KurtoRisk</span>
+      </div>
+      <div className="ay-sans" style={{ display: "flex", gap: 26, fontSize: 12, letterSpacing: "0.5px" }}>
+        <a className={view === "terminal" ? "active" : ""} onClick={() => setView("terminal")}>Analyse</a>
+        <a className={view === "movers" ? "active" : ""} onClick={() => setView("movers")}>Market movers</a>
+        <a className={view === "method" ? "active" : ""} onClick={() => setView("method")}>Methodology</a>
+        <a className={view === "validation" ? "active" : ""} onClick={() => setView("validation")}>Model Validation</a>
+        <a className={view === "glossary" ? "active" : ""} onClick={() => setView("glossary")}>Glossary</a>
+        {user ? <a onClick={onSignIn}>Hi, {user}</a> : <a onClick={onSignIn}>Sign in</a>}
+      </div>
+    </div>
+  );
+}
+
+function SignInModal({ onClose, onSubmit }) {
+  const [name, setName] = useState("");
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,32,27,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={onClose}>
+      <div className="ay-root" style={{ background: "#F6F3EC", padding: "30px 32px", width: 320, border: "1px solid #14201B" }} onClick={(e) => e.stopPropagation()}>
+        <div className="ay-disp" style={{ fontSize: 20, marginBottom: 4 }}>Sign in</div>
+        <p className="ay-sans" style={{ fontSize: 11.5, color: "#5C6B62", marginBottom: 16 }}>Local session for this demo — nothing is sent to a server.</p>
+        <input className="ay-sans" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)}
+          style={{ width: "100%", border: "1px solid rgba(20,32,27,0.2)", padding: "9px 10px", fontSize: 13, marginBottom: 14, boxSizing: "border-box" }} />
+        <button className="ay-btn solid" type="button" style={{ width: "100%" }} onClick={() => name.trim() && onSubmit(name.trim())}>CONTINUE</button>
+      </div>
+    </div>
+  );
+}
+
+/* =============================== LANDING ================================= */
+
+function Landing({ setView }) {
+  return (
+    <div>
+      <LiveTicker />
+      <div style={{ position: "relative", maxWidth: 1180, margin: "0 auto" }}>
+        <div className="ay-grid" style={{ maxWidth: 1180, margin: "0 auto" }} />
+        <div style={{ position: "relative", display: "flex", flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 480px", padding: "70px 40px 50px" }}>
+            <div className="ay-sans" style={{ fontSize: 11.5, letterSpacing: "1.5px", color: "#5C6B62", marginBottom: 18, display: "flex", alignItems: "center" }}>
+              <span className="ay-live" /> LIVE MARKET DATA
+            </div>
+            <h1 className="ay-disp" style={{ fontSize: 52, fontWeight: 400, lineHeight: 1.14, margin: "0 0 26px", letterSpacing: "-0.5px" }}>
+              Build a portfolio.<br />Read its <em style={{ fontStyle: "italic", color: "#1F6F5C" }}>real risk</em>, not just its price.
+            </h1>
+            <p style={{ fontSize: 17, lineHeight: 1.65, color: "#3A423D", maxWidth: 480, margin: "0 0 30px" }}>
+              KurtoRisk turns your holdings into volatility, drawdown, and tail-risk scenarios you can actually read —
+              recalculated the instant you change anything. No jargon, no buy or sell calls.
+            </p>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <button className="ay-btn solid" type="button" onClick={() => setView("terminal")}>BUILD YOUR PORTFOLIO <span className="arrow">→</span></button>
+              <button className="ay-btn" type="button" onClick={() => setView("movers")}>SEE MARKET MOVERS <span className="arrow">→</span></button>
+            </div>
+            <div className="ay-sans" style={{ marginTop: 34, fontSize: 11, letterSpacing: "1px", color: "#5C6B62" }}>STOCKS · ETFS · CRYPTO · COMMODITIES</div>
+          </div>
+          <div style={{ flex: "1 1 360px", padding: "40px", display: "flex", alignItems: "center" }}>
+            <div style={{ width: "100%", maxWidth: 420, boxShadow: "0 30px 60px -30px rgba(20,32,27,0.35)" }}>
+              <LivePanel onEnter={() => setView("terminal")} />
+            </div>
+          </div>
+        </div>
+        <div style={{ position: "relative", padding: "10px 40px 30px" }}>
+          <div className="ay-sans" style={{ fontSize: 11, letterSpacing: "1.5px", color: "#5C6B62", marginBottom: 14 }}>GLOBAL INDICES, LIVE</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+            {INDICES.map((idx) => <IndexCard key={idx.name} idx={idx} />)}
+          </div>
+        </div>
+        <div style={{ position: "relative", padding: "10px 40px 60px" }}>
+          <div className="ay-sans" style={{ fontSize: 11, letterSpacing: "1.5px", color: "#5C6B62", marginBottom: 14 }}>SECTOR HEATMAP, LIVE</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 3 }}>
+            {SECTORS.map((s) => <HeatTile key={s} name={s} />)}
+          </div>
+        </div>
+
+        <div style={{ position: "relative", padding: "10px 40px 70px" }}>
+          <div className="ay-sans" style={{ fontSize: 11, letterSpacing: "1.5px", color: "#5C6B62", marginBottom: 14 }}>ECONOMIC CALENDAR</div>
+          <table className="ay-t ay-mono" style={{ maxWidth: 720 }}>
+            <thead><tr><th className="ay-sans">When</th><th className="ay-sans">Event</th><th className="ay-sans">Impact</th><th>Forecast</th><th>Prior</th></tr></thead>
+            <tbody>
+              {[
+                ["Today 14:30", "US Core CPI m/m", "High", "0.3%", "0.2%"],
+                ["Today 20:00", "FOMC Rate Decision", "High", "4.25%", "4.25%"],
+                ["Tomorrow 08:00", "EU Industrial Production", "Medium", "-0.1%", "0.4%"],
+                ["Tomorrow 12:30", "US Initial Jobless Claims", "Medium", "224K", "231K"],
+                ["Fri 10:00", "China Retail Sales y/y", "Medium", "3.2%", "3.0%"],
+                ["Fri 14:30", "US Nonfarm Payrolls", "High", "180K", "142K"],
+              ].map((row, i) => (
+                <tr key={i}>
+                  <td className="ay-sans" style={{ fontSize: 12 }}>{row[0]}</td>
+                  <td style={{ fontFamily: "Source Serif 4, serif", fontSize: 13 }}>{row[1]}</td>
+                  <td style={{ color: row[2] === "High" ? "#A6321B" : "#9C6B24", fontSize: 11 }}>{row[2]}</td>
+                  <td>{row[3]}</td>
+                  <td style={{ color: "#5C6B62" }}>{row[4]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
