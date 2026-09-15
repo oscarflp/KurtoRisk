@@ -1702,3 +1702,216 @@ function Dashboard({ onBack, portfolios, savePortfolio, deletePortfolio, jumpTo 
                   </p>
                 </div>
                 <div style={{ flex: "1 1 260px" }} className="qt-note">
+                  <div style={{ fontSize: 10.5, color: "var(--sub)", marginBottom: 8 }}>FLAGS</div>
+                  {port.alerts.map((a, i) => <div key={i} style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 8, color: a.sev === "high" ? "var(--neg)" : a.sev === "medium" ? "var(--accent)" : "var(--ink)" }}>{a.text}</div>)}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab === "technical" && (() => {
+            const techRows = port.rows.map((r) => ({ ...r, tech: computeTechnicals(PRICES[r.t]) }));
+            const weighted = techRows.reduce((s, r) => s + r.tech.score * (r.weight / 100), 0);
+            const compLabel = weighted >= 1.3 ? "Strong Buy" : weighted >= 0.4 ? "Buy" : weighted >= -0.4 ? "Neutral" : weighted >= -1.3 ? "Sell" : "Strong Sell";
+            const compColor = weighted >= 0.4 ? "var(--pos)" : weighted <= -0.4 ? "var(--neg)" : "var(--accent)";
+            return (
+              <div key="tech" className="qt-section">
+                <div className="qt-h">TECHNICAL ANALYSIS</div>
+                <div className="qt-dek">SMA(20/50), RSI(14), MACD(12,26,9) computed on each holding's simulated price series</div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 14, marginBottom: 18 }}>
+                  <span style={{ fontSize: 11, color: "var(--sub)" }}>PORTFOLIO SIGNAL</span>
+                  <span className="qt-disp" style={{ fontSize: 22, fontWeight: 700, color: compColor }}>{compLabel}</span>
+                  <span style={{ fontSize: 11, color: "var(--sub)" }}>(weight-blended composite score {weighted.toFixed(2)})</span>
+                </div>
+                <table className="qt-t">
+                  <thead><tr><th>Ticker</th><th>Price</th><th>SMA20</th><th>SMA50</th><th>RSI14</th><th>MACD hist</th><th>MA</th><th>RSI</th><th>MACD</th><th>Signal</th></tr></thead>
+                  <tbody>
+                    {techRows.map((r) => (
+                      <tr key={r.t}>
+                        <td style={{ fontWeight: 600 }}>{r.t}</td>
+                        <td>{r.tech.price.toFixed(2)}</td>
+                        <td>{r.tech.sma20 != null ? r.tech.sma20.toFixed(2) : "—"}</td>
+                        <td>{r.tech.sma50 != null ? r.tech.sma50.toFixed(2) : "—"}</td>
+                        <td>{r.tech.rsi != null ? r.tech.rsi.toFixed(1) : "—"}</td>
+                        <td style={{ color: r.tech.macdHist >= 0 ? "var(--pos)" : "var(--neg)" }}>{r.tech.macdHist.toFixed(2)}</td>
+                        <td style={{ color: r.tech.maSignal === "Buy" ? "var(--pos)" : r.tech.maSignal === "Sell" ? "var(--neg)" : "var(--sub)", fontSize: 11 }}>{r.tech.maSignal}</td>
+                        <td style={{ color: r.tech.rsiSignal === "Buy" ? "var(--pos)" : r.tech.rsiSignal === "Sell" ? "var(--neg)" : "var(--sub)", fontSize: 11 }}>{r.tech.rsiSignal}</td>
+                        <td style={{ color: r.tech.macdSignal === "Buy" ? "var(--pos)" : r.tech.macdSignal === "Sell" ? "var(--neg)" : "var(--sub)", fontSize: 11 }}>{r.tech.macdSignal}</td>
+                        <td style={{ fontWeight: 600, color: r.tech.score > 0 ? "var(--pos)" : r.tech.score < 0 ? "var(--neg)" : "var(--sub)" }}>{r.tech.label}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="qt-dek" style={{ marginTop: 14 }}>Purely price-based technical signals — separate from, and not a substitute for, the risk metrics elsewhere in this terminal.</p>
+              </div>
+            );
+          })()}
+
+          {tab === "positions" && (
+            <div key="pos" className="qt-section">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+                <div className="qt-h">HOLDINGS</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="qt-btn" type="button" onClick={() => {
+                    const header = "Ticker,Name,Sector,Weight%,AnnVol%,Beta,Corr,VaRshare%,Score";
+                    const lines = port.rows.map((r) => [r.t, r.name, r.sector, r.weight.toFixed(2), (r.vol * 100).toFixed(2), r.beta.toFixed(2), r.corr.toFixed(2), r.varShare.toFixed(2), r.score].join(","));
+                    downloadText("kurtorisk_holdings.csv", [header, ...lines].join("\n"), "text/csv");
+                  }}>download CSV</button>
+                  <button className="qt-btn" type="button" onClick={normalize}>normalize to 100%</button>
+                </div>
+              </div>
+              <table className="qt-t">
+                <thead><tr><th>Ticker</th><th>Name</th><th>Sector</th><th>Weight</th><th>Vol</th><th>Beta</th><th>Corr</th><th>VaR share</th><th>Score</th></tr></thead>
+                <tbody>
+                  {port.rows.map((r) => (
+                    <tr key={r.t} style={{ cursor: "pointer" }} onClick={() => setDetail(detail === r.t ? null : r.t)}>
+                      <td style={{ fontWeight: 600 }}>{r.t}</td><td>{r.name}</td>
+                      <td style={{ color: "var(--sub)", fontSize: 10.5 }}>{r.sector}</td>
+                      <td onClick={(e) => e.stopPropagation()}><input className="qt-wt" value={weights[r.t] ?? ""} onChange={(e) => setWeight(r.t, e.target.value)} /></td>
+                      <td>{(r.vol * 100).toFixed(1)}%</td><td>{r.beta.toFixed(2)}</td><td>{r.corr.toFixed(2)}</td><td>{r.varShare.toFixed(1)}%</td>
+                      <td style={{ color: riskColor(r.score), fontWeight: 600 }}>{r.score}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {detail && (() => {
+                const info = STOCK_UNIVERSE.find((u) => u.t === detail);
+                const rets = RETURNS[detail]; const prices = PRICES[detail];
+                const chartData = prices.map((p, i) => ({ i, w: i % 21 === 0 ? `D${i}` : "", price: p }));
+                return (
+                  <div style={{ marginTop: 20 }}>
+                    <div className="qt-h">{info.name}</div>
+                    <div className="qt-dek">{info.sector} · standalone</div>
+                    <ResponsiveContainer width="100%" height={130}>
+                      <LineChart data={chartData} margin={{ top: 5, right: 8, left: -18, bottom: 0 }}>
+                        <CartesianGrid stroke="#D9D2C4" vertical={false} />
+                        <XAxis dataKey="w" tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={{ stroke: "#D9D2C4" }} tickLine={false} />
+                        <YAxis tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
+                        <Tooltip contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 11, border: "1px solid #D9D2C4", background: "#FFFFFF", color: "#14201B" }} />
+                        <Line type="monotone" dataKey="price" stroke="#1F6F5C" strokeWidth={1.5} dot={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                    <div style={{ fontSize: 11.5, marginTop: 8, display: "flex", gap: 20 }}>
+                      <span>vol {fmtPct(annVolOf(rets))}</span><span>max dd {fmtPct(maxDrawdownOf(prices))}</span><span>beta {info.beta.toFixed(2)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {tab === "correlation" && (
+            <div key="corr" className="qt-section">
+              <div className="qt-h">CORRELATION MATRIX</div>
+              <div style={{ overflowX: "auto" }}>
+                <table className="qt-t" style={{ minWidth: 440 }}>
+                  <thead><tr><th></th>{selected.map((t) => <th key={t} style={{ textAlign: "center" }}>{t}</th>)}</tr></thead>
+                  <tbody>
+                    {selected.map((a) => (
+                      <tr key={a}>
+                        <td style={{ fontWeight: 600 }}>{a}</td>
+                        {selected.map((b) => { const v = port.corr[a][b]; const bg = v === 1 ? "#D9D2C4" : v > 0 ? `rgba(166,50,27,${Math.min(0.8, v)})` : `rgba(31,111,92,${Math.min(0.8, -v)})`; return <td key={b} style={{ textAlign: "center", background: bg }}>{v.toFixed(2)}</td>; })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="qt-h" style={{ marginTop: 26 }}>SECTOR ALLOCATION</div>
+              {SECTORS_ORDER.filter((s) => port.secAlloc[s]).map((s) => (
+                <div key={s} style={{ display: "flex", alignItems: "center", gap: 12, margin: "8px 0" }}>
+                  <span style={{ fontSize: 11.5, width: 130, color: "var(--sub)" }}>{s}</span>
+                  <div style={{ flex: 1, background: "var(--hair)", height: 3 }}><div style={{ background: "var(--accent)", width: `${port.secAlloc[s]}%`, height: 3 }} /></div>
+                  <span style={{ fontSize: 11 }}>{port.secAlloc[s].toFixed(1)}%</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {tab === "riskreturn" && (
+            <div key="rr" className="qt-section">
+              <div className="qt-h">RISK / RETURN MAP</div>
+              <div className="qt-dek">bubble size = weight · diamond = blended portfolio</div>
+              <ResponsiveContainer width="100%" height={330}>
+                <ScatterChart margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
+                  <CartesianGrid stroke="#D9D2C4" />
+                  <XAxis type="number" dataKey="x" name="Volatility" unit="%" tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={{ stroke: "#D9D2C4" }} tickLine={false} />
+                  <YAxis type="number" dataKey="y" name="Return" unit="%" tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={false} tickLine={false} />
+                  <ZAxis type="number" dataKey="z" range={[60, 400]} />
+                  <Tooltip cursor={{ strokeDasharray: "3 3" }} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 11, border: "1px solid #D9D2C4", background: "#FFFFFF", color: "#14201B" }} formatter={(v, n) => [`${v.toFixed(1)}%`, n]} labelFormatter={() => ""} />
+                  <Scatter name="Holdings" data={port.rows.map((r) => ({ x: r.vol * 100, y: r.ret * 100, z: r.weight }))} fill="#1F6F5C" />
+                  <Scatter name="Portfolio" data={[{ x: port.annVol * 100, y: port.annRet * 100, z: 55 }]} fill="#9C6B24" shape="diamond" />
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {tab === "optimizer" && (
+            <div key="opt" className="qt-section">
+              <div className="qt-h">MARKOWITZ OPTIMIZER</div>
+              <div className="qt-dek">Closed-form solutions from the covariance matrix of your selected holdings</div>
+              {!port.optimizer && <p style={{ fontSize: 12.5, color: "var(--neg)" }}>Covariance matrix is singular for this selection — add a more diverse set of holdings.</p>}
+              {port.optimizer && (
+                <>
+                  <table className="qt-t">
+                    <thead><tr><th></th><th>Vol</th><th>Return</th><th>Sharpe</th><th></th></tr></thead>
+                    <tbody>
+                      <tr><td style={{ fontWeight: 600 }}>Current</td><td>{fmtPct(port.optimizer.current.stats.vol)}</td><td>{fmtPct(port.optimizer.current.stats.ret)}</td><td>{port.optimizer.current.stats.sharpe.toFixed(2)}</td><td></td></tr>
+                      <tr><td style={{ fontWeight: 600 }}>Min-variance</td><td>{fmtPct(port.optimizer.minVar.stats.vol)}</td><td>{fmtPct(port.optimizer.minVar.stats.ret)}</td><td>{port.optimizer.minVar.stats.sharpe.toFixed(2)}</td>
+                        <td><button className="qt-btn solid" type="button" onClick={() => applyWeights(Object.fromEntries(selected.map((t, i) => [t, +(Math.max(0, port.optimizer.minVar.weights[i]) * 100).toFixed(2)])))}>apply</button></td></tr>
+                      {port.optimizer.tangency && (
+                        <tr><td style={{ fontWeight: 600 }}>Max-Sharpe</td><td>{fmtPct(port.optimizer.tangency.stats.vol)}</td><td>{fmtPct(port.optimizer.tangency.stats.ret)}</td><td>{port.optimizer.tangency.stats.sharpe.toFixed(2)}</td>
+                          <td><button className="qt-btn solid" type="button" onClick={() => applyWeights(Object.fromEntries(selected.map((t, i) => [t, +(Math.max(0, port.optimizer.tangency.weights[i]) * 100).toFixed(2)])))}>apply</button></td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                  <div className="qt-h" style={{ marginTop: 24 }}>SUGGESTED WEIGHTS (unconstrained)</div>
+                  <table className="qt-t">
+                    <thead><tr><th>Ticker</th><th>Current</th><th>Min-var</th>{port.optimizer.tangency && <th>Max-Sharpe</th>}</tr></thead>
+                    <tbody>
+                      {selected.map((t, i) => (
+                        <tr key={t}><td style={{ fontWeight: 600 }}>{t}</td>
+                          <td>{port.optimizer.current.weights[i] !== undefined ? (port.optimizer.current.weights[i] * 100).toFixed(1) : "—"}%</td>
+                          <td>{(port.optimizer.minVar.weights[i] * 100).toFixed(1)}%</td>
+                          {port.optimizer.tangency && <td>{(port.optimizer.tangency.weights[i] * 100).toFixed(1)}%</td>}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          )}
+
+          {tab === "montecarlo" && (
+            <div key="mc" className="qt-section">
+              <div className="qt-h">MONTE CARLO SIMULATION</div>
+              <div className="qt-dek">Where can the portfolio be in 60 days? 300 trajectories bootstrapped from your own historical return distribution.</div>
+              <ResponsiveContainer width="100%" height={260}>
+                <AreaChart data={port.fan} margin={{ top: 5, right: 8, left: -18, bottom: 0 }}>
+                  <CartesianGrid stroke="#D9D2C4" vertical={false} />
+                  <XAxis dataKey="d" tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={{ stroke: "#D9D2C4" }} tickLine={false} />
+                  <YAxis tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
+                  <Tooltip contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 11, border: "1px solid #D9D2C4", background: "#FFFFFF", color: "#14201B" }} />
+                  <Area type="monotone" dataKey="p95" stroke="none" fill="#1F6F5C" fillOpacity={0.08} />
+                  <Area type="monotone" dataKey="p75" stroke="none" fill="#1F6F5C" fillOpacity={0.18} />
+                  <Area type="monotone" dataKey="p50" stroke="#14201B" fill="none" strokeWidth={1.6} />
+                  <Area type="monotone" dataKey="p05" stroke="none" fill="#A6321B" fillOpacity={0.08} />
+                </AreaChart>
+              </ResponsiveContainer>
+
+              <div style={{ display: "flex", gap: 14, marginTop: 20, flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 160px", border: "1px solid var(--hair)", padding: "14px 16px" }}>
+                  <div style={{ fontSize: 10.5, color: "var(--neg)" }}>PESSIMISTIC SCENARIO</div>
+                  <div className="qt-disp" style={{ fontSize: 22, fontWeight: 700 }}>{port.fan[port.fan.length - 1].p05.toFixed(2)}</div>
+                  <div style={{ fontSize: 10.5, color: "var(--sub)" }}>P5</div>
+                </div>
+                <div style={{ flex: "1 1 160px", border: "1px solid var(--hair)", padding: "14px 16px" }}>
+                  <div style={{ fontSize: 10.5, color: "var(--ink)" }}>CENTRAL TRAJECTORY</div>
+                  <div className="qt-disp" style={{ fontSize: 22, fontWeight: 700 }}>{port.fan[port.fan.length - 1].p50.toFixed(2)}</div>
+                  <div style={{ fontSize: 10.5, color: "var(--sub)" }}>Median</div>
+                </div>
+                <div style={{ flex: "1 1 160px", border: "1px solid var(--hair)", padding: "14px 16px" }}>
+                  <div style={{ fontSize: 10.5, color: "var(--pos)" }}>OPTIMISTIC SCENARIO</div>
+                  <div className="qt-disp" style={{ fontSize: 22, fontWeight: 700 }}>{port.fan[port.fan.length - 1].p95.toFixed(2)}</div>
+                  <div style={{ fontSize: 10.5, color: "var(--sub)" }}>P95</div>
+                </div>
