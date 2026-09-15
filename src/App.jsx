@@ -1276,3 +1276,216 @@ function CompareTab({ portfolios, currentSelected, currentWeights }) {
               <CartesianGrid stroke="#D9D2C4" vertical={false} />
               <XAxis dataKey="d" tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={{ stroke: "#D9D2C4" }} tickLine={false} />
               <YAxis tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
+              <Tooltip contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 11, border: "1px solid #D9D2C4", background: "#FFFFFF" }} />
+              {stats.map((s, i) => <Line key={i} type="monotone" dataKey={"p" + i} name={s.name} stroke={colors[i % 3]} strokeWidth={1.7} dot={false} />)}
+            </LineChart>
+          </ResponsiveContainer>
+          <table className="qt-t" style={{ marginTop: 16 }}>
+            <thead><tr><th>Portfolio</th><th>Vol</th><th>Return</th><th>Sharpe</th><th>Max DD</th><th>Holdings</th></tr></thead>
+            <tbody>
+              {stats.map((s, i) => (
+                <tr key={s.id}>
+                  <td style={{ fontWeight: 600, color: colors[i % 3] }}>{s.name}</td>
+                  <td>{fmtPct(s.s.vol)}</td><td>{fmtPct(s.s.ret)}</td><td>{s.s.sharpe.toFixed(2)}</td><td>{fmtPct(s.s.mdd)}</td>
+                  <td style={{ fontSize: 11 }}>{s.tickers.length}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Dashboard({ onBack, portfolios, savePortfolio, deletePortfolio, jumpTo }) {
+  const [selected, setSelected] = useState([]);
+  const [weights, setWeights] = useState({});
+  const [tab, setTab] = useState("overview");
+  const [detail, setDetail] = useState(null);
+  const [search, setSearch] = useState("");
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [showSaveBox, setShowSaveBox] = useState(false);
+  const [showManage, setShowManage] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [portName, setPortName] = useState("");
+  const [lastJump, setLastJump] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage.get("last-session", false);
+        if (res && res.value) {
+          const d = JSON.parse(res.value);
+          if (d.selected && d.selected.length) { setSelected(d.selected); setWeights(d.weights || {}); }
+        }
+      } catch (e) { /* nothing saved yet */ }
+      setSessionLoaded(true);
+    })();
+  }, []);
+  useEffect(() => {
+    if (!sessionLoaded) return;
+    window.storage.set("last-session", JSON.stringify({ selected, weights }), false).catch(() => {});
+  }, [selected, weights, sessionLoaded]);
+
+  useEffect(() => {
+    if (jumpTo && jumpTo.ts !== lastJump) {
+      setLastJump(jumpTo.ts);
+      if (!selected.includes(jumpTo.t)) {
+        const next = [...selected, jumpTo.t];
+        setSelected(next);
+        setWeights(equalize(next));
+      }
+      setDetail(jumpTo.t);
+      setTab("positions");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpTo]);
+
+  function equalize(list) { const w = {}; list.forEach((t) => (w[t] = list.length ? +(100 / list.length).toFixed(2) : 0)); return w; }
+  function toggle(ticker) {
+    let next;
+    if (selected.includes(ticker)) { next = selected.filter((x) => x !== ticker); if (detail === ticker) setDetail(null); }
+    else next = [...selected, ticker];
+    setSelected(next);
+    setWeights(equalize(next));
+  }
+  function loadExample() {
+    const ex = ["NVDA", "MSFT", "JPM", "AAPL", "ASML", "LVMH", "TSLA", "UNH", "TSM", "CASH"];
+    setSelected(ex); setWeights(equalize(ex));
+  }
+  function setWeight(t, v) { setWeights((prev) => ({ ...prev, [t]: v })); }
+  function normalize() {
+    const sum = selected.reduce((s, t) => s + (Number(weights[t]) || 0), 0);
+    if (!sum) return;
+    const w = {};
+    selected.forEach((t) => (w[t] = +((Number(weights[t]) || 0) * 100 / sum).toFixed(2)));
+    setWeights(w);
+  }
+  function applyWeights(map) { setWeights(map); }
+  function handleSavePortfolio() {
+    if (!portName.trim() || !selected.length) return;
+    savePortfolio(portName.trim(), selected, weights);
+    setPortName(""); setShowSaveBox(false);
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 2200);
+  }
+  function loadPortfolio(p) { setSelected(p.tickers); setWeights(p.weights); }
+
+  const filtered = STOCK_UNIVERSE.filter((s) =>
+    s.t.toLowerCase().includes(search.toLowerCase()) || s.name.toLowerCase().includes(search.toLowerCase()) || s.sector.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const port = useMemo(() => {
+    if (!selected.length) return null;
+    const wArr = selected.map((t) => (Number(weights[t]) || 0) / 100);
+    const wSum = wArr.reduce((a, b) => a + b, 0) || 1;
+    const wNorm = wArr.map((w) => w / wSum);
+
+    const portRets = [];
+    for (let d = 0; d < N_DAYS; d++) { let r = 0; selected.forEach((t, i) => (r += wNorm[i] * RETURNS[t][d])); portRets.push(r); }
+    const portPrices = [100];
+    portRets.forEach((r) => portPrices.push(portPrices[portPrices.length - 1] * (1 + r)));
+
+    const annVol = annVolOf(portRets);
+    const annRet = annRetOf(portRets);
+    const mdd = maxDrawdownOf(portPrices);
+    const sorted = [...portRets].sort((a, b) => a - b);
+    const var95 = quantile(sorted, 0.05);
+    const tailSet = sorted.filter((r) => r <= var95);
+    const cvar95 = tailSet.length ? mean(tailSet) : var95;
+    const sharpe = (annRet - RF) / annVol;
+    const downside = portRets.filter((r) => r < 0);
+    const downsideDev = downside.length ? std(downside) * Math.sqrt(252) : 0.0001;
+    const sortino = (annRet - RF) / downsideDev;
+    const calmar = mdd !== 0 ? annRet / Math.abs(mdd) : 0;
+    const beta = selected.reduce((s, t, i) => s + wNorm[i] * STOCK_UNIVERSE.find((u) => u.t === t).beta, 0);
+
+    const skew = skewnessOf(portRets);
+    const kurt = kurtosisExcessOf(portRets);
+    const cfVar = cornishFisherVaR(portRets);
+    const omega = omegaRatio(portRets, 0);
+    const dd = drawdownSeries(portPrices);
+    const ulcer = ulcerIndex(dd);
+    const ewmaVolFwd = ewmaVol(portRets);
+    const treynor = beta !== 0 ? (annRet - RF) / beta : NaN;
+    const dBeta = downsideBeta(portRets, marketRet);
+
+    const hhi = wNorm.reduce((s, w) => s + w * w, 0);
+    const concScore = scoreClip((hhi - 1 / selected.length) / (1 - 1 / Math.max(selected.length, 2)) * 100 || (selected.length === 1 ? 100 : 0));
+    const volScore = scoreClip((annVol / 0.45) * 100);
+    const ddScore = scoreClip((Math.abs(mdd) / 0.35) * 100);
+    const tailScore = scoreClip((Math.abs(var95) / 0.06) * 100);
+    const riskScore = Math.round(0.35 * volScore + 0.25 * ddScore + 0.2 * concScore + 0.2 * tailScore);
+
+    const corr = {};
+    selected.forEach((a) => { corr[a] = {}; selected.forEach((b) => { corr[a][b] = a === b ? 1 : pearson(RETURNS[a], RETURNS[b]); }); });
+    const avgCorr = {};
+    selected.forEach((a) => { const others = selected.filter((b) => b !== a); avgCorr[a] = others.length ? mean(others.map((b) => corr[a][b])) : 0; });
+
+    const rows = selected.map((t, i) => {
+      const info = STOCK_UNIVERSE.find((u) => u.t === t);
+      const rets = RETURNS[t];
+      const v = annVolOf(rets);
+      const ownSorted = [...rets].sort((a, b) => a - b);
+      const ownVar = quantile(ownSorted, 0.05);
+      const s = scoreClip(0.5 * (v / 0.45) * 100 + 0.3 * (Math.abs(maxDrawdownOf(PRICES[t])) / 0.35) * 100 + 0.2 * (Math.abs(ownVar) / 0.06) * 100);
+      return { t, name: info.name, sector: info.sector, weight: wNorm[i] * 100, vol: v, ret: annRetOf(rets), beta: info.beta, corr: avgCorr[t], varContribPct: wNorm[i] * Math.abs(ownVar) * 100, score: Math.round(s) };
+    });
+    const totalVarContrib = rows.reduce((s, r) => s + r.varContribPct, 0) || 1;
+    rows.forEach((r) => (r.varShare = (r.varContribPct / totalVarContrib) * 100));
+
+    const secAlloc = {};
+    rows.forEach((r) => (secAlloc[r.sector] = (secAlloc[r.sector] || 0) + r.weight));
+
+    const stress = STRESS_SCENARIOS.map((sc) => {
+      const impact = selected.reduce((s, t, i) => { const info = STOCK_UNIVERSE.find((u) => u.t === t); return s + wNorm[i] * sc.impact(info); }, 0);
+      return { name: sc.name, impact };
+    });
+
+    const benchAnnRet = annRetOf(marketRet);
+    const alpha = (annRet - RF) - beta * (benchAnnRet - RF);
+    const trackDiff = portRets.map((r, i) => r - marketRet[i]);
+    const trackingError = std(trackDiff) * Math.sqrt(252);
+    const infoRatio = trackingError ? (annRet - benchAnnRet) / trackingError : 0;
+
+    const n = selected.length;
+    const covMat = selected.map((a) => selected.map((b) => covariance(RETURNS[a], RETURNS[b]) * 252));
+    const inv = invertMatrix(covMat);
+    let minVar = null, tangency = null;
+    if (inv) {
+      const ones = Array(n).fill(1);
+      const rawMV = matVec(inv, ones);
+      const sumMV = rawMV.reduce((s, x) => s + x, 0);
+      minVar = rawMV.map((x) => x / sumMV);
+      const excess = selected.map((t) => annRetOf(RETURNS[t]) - RF);
+      const rawTan = matVec(inv, excess);
+      const sumTan = rawTan.reduce((s, x) => s + x, 0);
+      tangency = sumTan !== 0 ? rawTan.map((x) => x / sumTan) : null;
+    }
+    function statsFor(wgts) {
+      const rets = [];
+      for (let d = 0; d < N_DAYS; d++) { let r = 0; selected.forEach((t, i) => (r += wgts[i] * RETURNS[t][d])); rets.push(r); }
+      return { vol: annVolOf(rets), ret: annRetOf(rets), sharpe: (annRetOf(rets) - RF) / annVolOf(rets) };
+    }
+    const optimizer = inv ? {
+      minVar: { weights: minVar, stats: statsFor(minVar) },
+      tangency: tangency ? { weights: tangency, stats: statsFor(tangency) } : null,
+      current: { weights: wNorm, stats: { vol: annVol, ret: annRet, sharpe } },
+    } : null;
+
+    const MC_PATHS = 300, MC_DAYS = 60;
+    const mcRng = mulberry32(hashStr(selected.join(",") + "_MC"));
+    const paths = [];
+    for (let p = 0; p < MC_PATHS; p++) {
+      let val = 100;
+      const path = [val];
+      for (let d = 0; d < MC_DAYS; d++) {
+        const idx = Math.floor(mcRng() * portRets.length);
+        val *= 1 + portRets[idx];
+        path.push(val);
+      }
+      paths.push(path);
+    }
+    const fan = [];
+    for (let d = 0; d <= MC_DAYS; d++) {
