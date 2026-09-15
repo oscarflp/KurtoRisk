@@ -637,4 +637,216 @@ function Landing({ setView }) {
     </div>
   );
 }
-undefined
+
+/* ============================ MARKET MOVERS ============================== */
+
+function MarketMovers({ setView, cash, setCash, positions, setPositions }) {
+  const [live, setLive] = useState(() => Object.fromEntries(STOCK_UNIVERSE.map((s) => {
+    const last = PRICES[s.t][PRICES[s.t].length - 1];
+    const prev = PRICES[s.t][PRICES[s.t].length - 2];
+    return [s.t, { p: last, chg: (last / prev - 1) * 100 }];
+  })));
+  const [sortKey, setSortKey] = useState("chg");
+  const [sortDir, setSortDir] = useState(-1);
+  const [alerts, setAlerts] = useState({});
+  const [alertInputs, setAlertInputs] = useState({});
+  const [triggered, setTriggered] = useState([]);
+  const alertsRef = useRef({});
+  useEffect(() => { alertsRef.current = alerts; }, [alerts]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setLive((prev) => {
+        const next = {};
+        const fires = [];
+        STOCK_UNIVERSE.forEach((s) => {
+          const cur = prev[s.t].p;
+          const j = (Math.random() - 0.5) * cur * 0.004;
+          const np = Math.max(0.5, cur + j);
+          next[s.t] = { p: np, chg: prev[s.t].chg + (j / cur) * 100 };
+          const al = alertsRef.current[s.t];
+          if (al && !al.done) {
+            const nowAbove = np >= al.target;
+            if (nowAbove !== al.above) {
+              fires.push(`${s.t} crossed ${al.target.toFixed(2)}`);
+              al.done = true;
+            }
+          }
+        });
+        if (fires.length) setTriggered((t) => [...fires, ...t].slice(0, 6));
+        return next;
+      });
+    }, 1500);
+    return () => clearInterval(id);
+  }, []);
+
+  function armAlert(t) {
+    const target = Number(alertInputs[t]);
+    if (!target) return;
+    setAlerts((prev) => ({ ...prev, [t]: { target, above: live[t].p >= target, done: false } }));
+  }
+
+  const rows = STOCK_UNIVERSE.map((s) => ({
+    t: s.t, name: s.name, sector: s.sector, beta: s.beta,
+    vol: annVolOf(RETURNS[s.t]), p: live[s.t].p, chg: live[s.t].chg,
+  }));
+  rows.sort((a, b) => (a[sortKey] > b[sortKey] ? 1 : -1) * sortDir);
+
+  function headerClick(key) {
+    if (sortKey === key) setSortDir((d) => -d);
+    else { setSortKey(key); setSortDir(-1); }
+  }
+
+  const breadth = rows.filter((r) => r.chg >= 0).length / rows.length;
+  const avgChg = mean(rows.map((r) => r.chg));
+  const avgVol = mean(rows.map((r) => r.vol));
+  const fgScore = Math.max(0, Math.min(100, 50 + (breadth - 0.5) * 100 * 0.6 + avgChg * 8 - (avgVol - 0.20) * 100 * 0.5));
+  const fgLabel = fgScore < 25 ? "Extreme Fear" : fgScore < 45 ? "Fear" : fgScore < 55 ? "Neutral" : fgScore < 75 ? "Greed" : "Extreme Greed";
+  function buy(t) {
+    const price = live[t].p;
+    const qty = 10;
+    const cost = price * qty;
+    if (cost > cash) return;
+    setCash((c) => c - cost);
+    setPositions((prev) => {
+      const cur = prev[t] || { qty: 0, avgCost: 0 };
+      const newQty = cur.qty + qty;
+      const newAvg = (cur.qty * cur.avgCost + cost) / newQty;
+      return { ...prev, [t]: { qty: newQty, avgCost: newAvg } };
+    });
+  }
+  function sell(t) {
+    const pos = positions[t];
+    if (!pos || pos.qty <= 0) return;
+    const qty = Math.min(10, pos.qty);
+    const price = live[t].p;
+    setCash((c) => c + price * qty);
+    setPositions((prev) => {
+      const remaining = pos.qty - qty;
+      const next = { ...prev };
+      if (remaining <= 0) delete next[t]; else next[t] = { ...pos, qty: remaining };
+      return next;
+    });
+  }
+  const heldTickers = Object.keys(positions);
+  const positionsValue = heldTickers.reduce((s, t) => s + positions[t].qty * (live[t] ? live[t].p : 0), 0);
+  const costBasis = heldTickers.reduce((s, t) => s + positions[t].qty * positions[t].avgCost, 0);
+  const equity = cash + positionsValue;
+  const totalPL = positionsValue - costBasis;
+
+  const fgColor = fgScore < 45 ? "#A6321B" : fgScore < 55 ? "#9C6B24" : "#1F6F5C";
+
+  return (
+    <div style={{ maxWidth: 1080, margin: "0 auto", padding: "50px 40px 70px" }}>
+      <div className="ay-disp" style={{ fontSize: 30, marginBottom: 6 }}>Market movers</div>
+      <p className="ay-sans" style={{ fontSize: 13, color: "#5C6B62", marginBottom: 24 }}>
+        All {STOCK_UNIVERSE.length} names in the KurtoRisk universe, live-updating · click a column to sort · same
+        engine that powers the risk terminal.
+      </p>
+
+      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 30 }}>
+        <div style={{ border: "1px solid rgba(20,32,27,0.15)", padding: "16px 20px", minWidth: 220 }}>
+          <div className="ay-sans" style={{ fontSize: 10.5, letterSpacing: "1px", color: "#5C6B62" }}>FEAR &amp; GREED INDEX</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <span className="ay-mono" style={{ fontSize: 30, fontWeight: 700, color: fgColor }}><AnimatedStat value={fgScore} fmt={(v) => Math.round(v)} /></span>
+            <span className="ay-sans" style={{ fontSize: 13, color: fgColor }}>{fgLabel}</span>
+          </div>
+          <div style={{ background: "rgba(20,32,27,0.1)", height: 5, marginTop: 6 }}><div style={{ width: `${fgScore}%`, height: 5, background: fgColor }} /></div>
+          <div className="ay-sans" style={{ fontSize: 10, color: "#5C6B62", marginTop: 4 }}>breadth {(breadth * 100).toFixed(0)}% up · avg vol {(avgVol * 100).toFixed(1)}%</div>
+        </div>
+        <div style={{ border: "1px solid rgba(20,32,27,0.15)", padding: "16px 20px", minWidth: 240 }}>
+          <div className="ay-sans" style={{ fontSize: 10.5, letterSpacing: "1px", color: "#5C6B62" }}>PAPER TRADING · $100,000 START</div>
+          <div style={{ display: "flex", gap: 18, marginTop: 4 }}>
+            <div><div className="ay-sans" style={{ fontSize: 9.5, color: "#8A9690" }}>Equity</div><div className="ay-mono" style={{ fontSize: 18, fontWeight: 700 }}>$<AnimatedStat value={equity} fmt={(v) => v.toFixed(0)} /></div></div>
+            <div><div className="ay-sans" style={{ fontSize: 9.5, color: "#8A9690" }}>Cash</div><div className="ay-mono" style={{ fontSize: 14 }}>${cash.toFixed(0)}</div></div>
+            <div><div className="ay-sans" style={{ fontSize: 9.5, color: "#8A9690" }}>Open P&amp;L</div><div className="ay-mono" style={{ fontSize: 14, color: totalPL >= 0 ? "#1F6F5C" : "#A6321B" }}>{totalPL >= 0 ? "+" : ""}${totalPL.toFixed(0)}</div></div>
+          </div>
+          {heldTickers.length > 0 && (
+            <div className="ay-sans" style={{ fontSize: 11, marginTop: 8, color: "#5C6B62" }}>{heldTickers.map((t) => `${t} ×${positions[t].qty}`).join(" · ")}</div>
+          )}
+        </div>
+        {triggered.length > 0 && (
+          <div style={{ border: "1px solid rgba(166,50,27,0.4)", padding: "16px 20px", flex: "1 1 260px" }}>
+            <div className="ay-sans" style={{ fontSize: 10.5, letterSpacing: "1px", color: "#A6321B", marginBottom: 6 }}>TRIGGERED ALERTS</div>
+            {triggered.map((t, i) => <div key={i} className="ay-mono" style={{ fontSize: 12.5, marginBottom: 3 }}>▲ {t}</div>)}
+          </div>
+        )}
+      </div>
+
+      <table className="ay-t ay-mono">
+        <thead>
+          <tr>
+            <th className="ay-sans" onClick={() => headerClick("t")}>Ticker</th>
+            <th className="ay-sans" onClick={() => headerClick("name")}>Name</th>
+            <th onClick={() => headerClick("p")}>Price</th>
+            <th onClick={() => headerClick("chg")}>Change</th>
+            <th onClick={() => headerClick("vol")}>Vol</th>
+            <th className="ay-sans">Analyst consensus</th>
+            <th>Target</th>
+            <th className="ay-sans">Set alert</th>
+            <th className="ay-sans">Trade</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const a = ANALYST[r.t];
+            const upside = (a.target / r.p - 1) * 100;
+            return (
+              <tr key={r.t}>
+                <td style={{ fontWeight: 700 }}>{r.t}</td>
+                <td style={{ fontFamily: "Source Serif 4, serif" }}>{r.name}</td>
+                <td>{r.p.toFixed(2)}</td>
+                <td style={{ color: r.chg >= 0 ? "#1F6F5C" : "#A6321B", fontWeight: 600 }}>{r.chg >= 0 ? "+" : ""}{r.chg.toFixed(2)}%</td>
+                <td>{(r.vol * 100).toFixed(1)}%</td>
+                <td className="ay-sans" style={{ fontSize: 11.5, color: a.consensus.includes("Buy") ? "#1F6F5C" : a.consensus === "Hold" ? "#9C6B24" : "#A6321B" }}>{a.consensus} ({a.total})</td>
+                <td>{a.target.toFixed(2)} <span style={{ fontSize: 10, color: upside >= 0 ? "#1F6F5C" : "#A6321B" }}>({upside >= 0 ? "+" : ""}{upside.toFixed(1)}%)</span></td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                    <input className="ay-sans" placeholder="px" value={alertInputs[r.t] ?? ""} onChange={(e) => setAlertInputs((p) => ({ ...p, [r.t]: e.target.value }))}
+                      style={{ width: 52, border: "1px solid rgba(20,32,27,0.2)", padding: "3px 5px", fontSize: 11 }} />
+                    <button className="ay-sans" type="button" onClick={() => armAlert(r.t)}
+                      style={{ border: "1px solid #14201B", background: alerts[r.t] && !alerts[r.t].done ? "#14201B" : "none", color: alerts[r.t] && !alerts[r.t].done ? "#F6F3EC" : "#14201B", fontSize: 10, padding: "3px 7px", cursor: "pointer" }}>
+                      {alerts[r.t] && !alerts[r.t].done ? "armed" : "set"}
+                    </button>
+                  </div>
+                </td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                    <button className="ay-sans" type="button" onClick={() => buy(r.t)}
+                      style={{ border: "1px solid #1F6F5C", background: "none", color: "#1F6F5C", fontSize: 10, padding: "3px 7px", cursor: "pointer" }}>buy 10</button>
+                    <button className="ay-sans" type="button" onClick={() => sell(r.t)} disabled={!positions[r.t]}
+                      style={{ border: "1px solid #A6321B", background: "none", color: positions[r.t] ? "#A6321B" : "#C9BFB2", fontSize: 10, padding: "3px 7px", cursor: positions[r.t] ? "pointer" : "default" }}>sell 10</button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
+        <button className="ay-btn solid" type="button" onClick={() => setView("terminal")}>ANALYSE THESE IN THE TERMINAL →</button>
+        <button className="ay-btn" type="button" onClick={() => {
+          const header = "Ticker,Name,Sector,Price,Change%,AnnVol%,Analyst,Target";
+          const lines = rows.map((r) => { const a = ANALYST[r.t]; return [r.t, r.name, r.sector, r.p.toFixed(2), r.chg.toFixed(2), (r.vol * 100).toFixed(2), a.consensus, a.target.toFixed(2)].join(","); });
+          downloadText("kurtorisk_market_movers.csv", [header, ...lines].join("\n"), "text/csv");
+        }}>download CSV</button>
+      </div>
+    </div>
+  );
+}
+
+/* ================================ METHOD ================================= */
+
+function FlowNode({ icon: Icon, label, sub, color }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, minWidth: 100 }}>
+      <div style={{ width: 52, height: 52, borderRadius: "50%", border: `1.5px solid ${color}`, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(31,111,92,0.05)" }}>
+        <Icon size={22} color={color} strokeWidth={1.6} />
+      </div>
+      <div style={{ textAlign: "center" }}>
+        <div className="ay-sans" style={{ fontSize: 11.5, fontWeight: 600, color: "#14201B" }}>{label}</div>
+        <div className="ay-sans" style={{ fontSize: 9.5, color: "#8A9690" }}>{sub}</div>
+      </div>
+    </div>
+  );
+}
