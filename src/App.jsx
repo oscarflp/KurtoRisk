@@ -1063,3 +1063,216 @@ const EXAMPLE_SET = ["NVDA", "MSFT", "JPM", "AAPL", "ASML", "LVMH", "TSLA", "UNH
 function computePortfolioStats(tickers, weights) {
   const rets = [];
   for (let d = 0; d < N_DAYS; d++) { let r = 0; tickers.forEach((t, i) => (r += weights[i] * RETURNS[t][d])); rets.push(r); }
+  const prices = [100];
+  rets.forEach((r) => prices.push(prices[prices.length - 1] * (1 + r)));
+  return { vol: annVolOf(rets), ret: annRetOf(rets), sharpe: (annRetOf(rets) - RF) / annVolOf(rets), mdd: maxDrawdownOf(prices), rets };
+}
+
+function useValidationData() {
+  return useMemo(() => {
+    const n = EXAMPLE_SET.length;
+    const eqW = Array(n).fill(1 / n);
+    const eq = computePortfolioStats(EXAMPLE_SET, eqW);
+
+    const covMat = EXAMPLE_SET.map((a) => EXAMPLE_SET.map((b) => covariance(RETURNS[a], RETURNS[b]) * 252));
+    const inv = invertMatrix(covMat);
+    let minVarStats = null, tanStats = null;
+    if (inv) {
+      const ones = Array(n).fill(1);
+      const rawMV = matVec(inv, ones);
+      const sumMV = rawMV.reduce((s, x) => s + x, 0);
+      const minVar = rawMV.map((x) => x / sumMV);
+      minVarStats = computePortfolioStats(EXAMPLE_SET, minVar);
+      const excess = EXAMPLE_SET.map((t) => annRetOf(RETURNS[t]) - RF);
+      const rawTan = matVec(inv, excess);
+      const sumTan = rawTan.reduce((s, x) => s + x, 0);
+      if (sumTan !== 0) { const tangency = rawTan.map((x) => x / sumTan); tanStats = computePortfolioStats(EXAMPLE_SET, tangency); }
+    }
+
+    const rng = mulberry32(hashStr("VALIDATION_BOOTSTRAP"));
+    const N_BOOT = 1000;
+    const varSamples = [];
+    for (let b = 0; b < N_BOOT; b++) {
+      const sample = [];
+      for (let i = 0; i < eq.rets.length; i++) sample.push(eq.rets[Math.floor(rng() * eq.rets.length)]);
+      const sorted = [...sample].sort((a, b2) => a - b2);
+      varSamples.push(Math.abs(quantile(sorted, 0.05)));
+    }
+    varSamples.sort((a, b) => a - b);
+    const varMedian = quantile(varSamples, 0.5), varP5 = quantile(varSamples, 0.05), varP95 = quantile(varSamples, 0.95);
+    const minV = varSamples[0], maxV = varSamples[varSamples.length - 1];
+    const nBins = 16, binW = (maxV - minV) / nBins || 0.001;
+    const bins = Array.from({ length: nBins }, (_, i) => ({ lo: minV + i * binW, hi: minV + (i + 1) * binW, count: 0 }));
+    varSamples.forEach((v) => { const i = Math.min(nBins - 1, Math.floor((v - minV) / binW)); bins[i].count++; });
+    const histData = bins.map((b) => ({ bin: (((b.lo + b.hi) / 2) * 100).toFixed(1) + "%", count: b.count }));
+
+    return { eq, minVarStats, tanStats, varMedian, varP5, varP95, histData };
+  }, []);
+}
+
+function ModelValidation({ setView }) {
+  const d = useValidationData();
+  return (
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: "50px 40px 80px" }}>
+      <div className="ay-mono" style={{ fontSize: 11, color: "#1F6F5C", marginBottom: 8 }}>WORKING NOTE · v1.0 · KurtoRisk Research</div>
+      <div className="ay-disp" style={{ fontSize: 30, marginBottom: 6 }}>Model Validation</div>
+      <p className="ay-sans" style={{ fontSize: 13.5, color: "#5C6B62", marginBottom: 26, maxWidth: 640 }}>
+        Bootstrap validation of the risk engine and a real, computed comparison of the portfolio optimizer against a naive
+        equal-weight baseline, on the example holding set ({EXAMPLE_SET.join(", ")}). Every figure below is computed live
+        by the same engine as the terminal — nothing here is a backtested trading record.
+      </p>
+
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 34 }}>
+        {[
+          ["Bootstrap VaR95 (median)", fmtPct(d.varMedian)],
+          ["[P5, P95] interval", `${fmtPct(d.varP5)} – ${fmtPct(d.varP95)}`],
+          ["Min-var vs equal-weight", d.minVarStats ? fmtPct(d.eq.vol - d.minVarStats.vol) + " less vol" : "n/a"],
+          ["Bootstrap resamples", "1,000"],
+        ].map(([l, v], i) => (
+          <div key={i} style={{ border: "1px solid rgba(20,32,27,0.15)", padding: "14px 18px", minWidth: 150 }}>
+            <div className="ay-sans" style={{ fontSize: 10, color: "#8A9690" }}>{l}</div>
+            <div className="ay-mono" style={{ fontSize: 19, fontWeight: 700 }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ padding: "18px 0", borderBottom: "1px solid rgba(20,32,27,0.12)" }}>
+        <div className="ay-disp" style={{ fontSize: 18, marginBottom: 8 }}>01 · Executive summary</div>
+        <p style={{ fontSize: 14, lineHeight: 1.7, color: "#3A423D" }}>
+          On this holding set, the closed-form minimum-variance portfolio realises {fmtPct(d.minVarStats ? d.minVarStats.vol : 0)} annualised
+          volatility versus {fmtPct(d.eq.vol)} for naive equal weighting — a real, computed reduction, not an assumption. The
+          bootstrap distribution of historical VaR95 (1,000 resamples with replacement from the 252-day window) has a median
+          of {fmtPct(d.varMedian)} and a 5-95% interval of [{fmtPct(d.varP5)}, {fmtPct(d.varP95)}], giving a sense of how much a single-window
+          VaR estimate could plausibly have differed.
+        </p>
+      </div>
+
+      <div style={{ padding: "18px 0", borderBottom: "1px solid rgba(20,32,27,0.12)" }}>
+        <div className="ay-disp" style={{ fontSize: 18, marginBottom: 8 }}>02 · Method comparison</div>
+        <p className="ay-sans" style={{ fontSize: 12.5, color: "#5C6B62", marginBottom: 12 }}>Same 10 holdings, three weighting schemes, computed over the same 252-day window.</p>
+        <table className="ay-t ay-mono">
+          <thead><tr><th className="ay-sans">Scheme</th><th>Vol</th><th>Return</th><th>Sharpe</th><th>Max DD</th></tr></thead>
+          <tbody>
+            <tr><td style={{ fontFamily: "Source Serif 4, serif" }}>Equal weight</td><td>{fmtPct(d.eq.vol)}</td><td>{fmtPct(d.eq.ret)}</td><td>{d.eq.sharpe.toFixed(2)}</td><td>{fmtPct(d.eq.mdd)}</td></tr>
+            {d.minVarStats && <tr><td style={{ fontFamily: "Source Serif 4, serif" }}>Min-variance</td><td>{fmtPct(d.minVarStats.vol)}</td><td>{fmtPct(d.minVarStats.ret)}</td><td>{d.minVarStats.sharpe.toFixed(2)}</td><td>{fmtPct(d.minVarStats.mdd)}</td></tr>}
+            {d.tanStats && <tr><td style={{ fontFamily: "Source Serif 4, serif" }}>Max-Sharpe</td><td>{fmtPct(d.tanStats.vol)}</td><td>{fmtPct(d.tanStats.ret)}</td><td>{d.tanStats.sharpe.toFixed(2)}</td><td>{fmtPct(d.tanStats.mdd)}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ padding: "18px 0", borderBottom: "1px solid rgba(20,32,27,0.12)" }}>
+        <div className="ay-disp" style={{ fontSize: 18, marginBottom: 8 }}>03 · Bootstrap distribution of VaR95</div>
+        <p className="ay-sans" style={{ fontSize: 12.5, color: "#5C6B62", marginBottom: 12 }}>1,000 resamples with replacement from the equal-weight portfolio's 252 daily returns.</p>
+        <ResponsiveContainer width="100%" height={200}>
+          <BarChart data={d.histData} margin={{ top: 5, right: 8, left: -18, bottom: 0 }}>
+            <CartesianGrid stroke="#D9D2C4" vertical={false} />
+            <XAxis dataKey="bin" tick={{ fontSize: 9, fill: "#5C6B62" }} axisLine={{ stroke: "#D9D2C4" }} tickLine={false} />
+            <YAxis tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={false} tickLine={false} />
+            <Tooltip contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 11, border: "1px solid #D9D2C4", background: "#FFFFFF" }} />
+            <Bar dataKey="count" fill="#1F6F5C" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{ padding: "18px 0" }}>
+        <div className="ay-disp" style={{ fontSize: 18, marginBottom: 8 }}>04 · Limitations</div>
+        <ul style={{ fontSize: 13.5, lineHeight: 1.8, color: "#3A423D", paddingLeft: 20, margin: 0 }}>
+          <li>Underlying prices are simulated (market + sector factor + idiosyncratic noise), not real historical data.</li>
+          <li>252 sessions is a short window; the bootstrap resamples the same window rather than drawing from independent history.</li>
+          <li>The optimizer is a closed-form Markowitz solution — it has no transaction costs, no turnover constraint, and assumes the covariance matrix is stable going forward, which real markets rarely guarantee.</li>
+          <li>Nothing here is a live or backtested trading record. It validates internal consistency of the engine, not real-world performance.</li>
+        </ul>
+      </div>
+
+      <p className="ay-sans" style={{ fontSize: 11, color: "#8A9690", marginTop: 24, lineHeight: 1.6 }}>
+        This document presents engine-validation results, not a live trading record. KurtoRisk does not provide investment advice.
+      </p>
+      <button className="ay-btn solid" type="button" style={{ marginTop: 16 }} onClick={() => setView("terminal")}>OPEN THE TERMINAL →</button>
+    </div>
+  );
+}
+
+/* =============================== TERMINAL ================================ */
+
+function LiveTickerDark() {
+  const [live, setLive] = useState(() => Object.fromEntries(STOCK_UNIVERSE.map((s) => [s.t, { p: PRICES[s.t][PRICES[s.t].length - 1], dir: 0 }])));
+  useEffect(() => {
+    const id = setInterval(() => {
+      setLive((prev) => {
+        const next = {};
+        STOCK_UNIVERSE.forEach((s) => {
+          const cur = prev[s.t].p;
+          const j = (Math.random() - 0.5) * cur * 0.006;
+          next[s.t] = { p: Math.max(0.5, cur + j), dir: j >= 0 ? 1 : -1 };
+        });
+        return next;
+      });
+    }, 1300);
+    return () => clearInterval(id);
+  }, []);
+  const row = [...STOCK_UNIVERSE, ...STOCK_UNIVERSE];
+  return (
+    <div className="qt-tickerwrap">
+      <div className="qt-tickertrack">
+        {row.map((s, i) => {
+          const d = live[s.t];
+          return (
+            <span key={i} className="qt-tick">
+              <b>{s.t}</b>
+              <span className="qt-tickp" style={{ color: d.dir >= 0 ? "#6FCB9F" : "#E38A7D" }}>{d.p.toFixed(2)}</span>
+              <span style={{ color: d.dir >= 0 ? "#6FCB9F" : "#E38A7D" }}>{d.dir >= 0 ? "▲" : "▼"}</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CompareTab({ portfolios, currentSelected, currentWeights }) {
+  const candidates = [
+    { id: "__current", name: "Current selection", tickers: currentSelected, weightsArr: weightsObjToArray(currentSelected, currentWeights) },
+    ...portfolios.map((p) => ({ id: p.id, name: p.name, tickers: p.tickers, weightsArr: weightsObjToArray(p.tickers, p.weights) })),
+  ].filter((c) => c.tickers && c.tickers.length);
+
+  const [picked, setPicked] = useState(() => candidates.slice(0, Math.min(2, candidates.length)).map((c) => c.id));
+
+  function toggle(id) {
+    setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length < 3 ? [...prev, id] : prev));
+  }
+
+  const chosen = candidates.filter((c) => picked.includes(c.id));
+  const stats = chosen.map((c) => ({ ...c, s: computePortfolioStats(c.tickers, c.weightsArr) }));
+  const colors = ["#1F6F5C", "#9C6B24", "#A6321B"];
+
+  const chartData = Array.from({ length: N_DAYS + 1 }, (_, d) => ({ d }));
+  stats.forEach((s, i) => {
+    let val = 100;
+    chartData[0]["p" + i] = 100;
+    s.s.rets.forEach((r, d) => { val *= 1 + r; chartData[d + 1]["p" + i] = val; });
+  });
+
+  return (
+    <div className="qt-section">
+      <div className="qt-h">COMPARE PORTFOLIOS</div>
+      <div className="qt-dek">Pick up to 3 — includes your current selection and anything you've saved</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
+        {candidates.map((c) => {
+          const pickedIdx = picked.indexOf(c.id);
+          return (
+            <span key={c.id} className={`qt-chip ${pickedIdx >= 0 ? "on" : ""}`} onClick={() => toggle(c.id)} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              {pickedIdx >= 0 && <span style={{ width: 7, height: 7, borderRadius: "50%", background: colors[pickedIdx % 3], display: "inline-block" }} />}
+              {c.name}
+            </span>
+          );
+        })}
+        {!candidates.length && <span className="qt-dek">Save a portfolio (or select holdings) to compare.</span>}
+      </div>
+
+      {stats.length > 0 && (
+        <>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={chartData} margin={{ top: 5, right: 8, left: -18, bottom: 0 }}>
+              <CartesianGrid stroke="#D9D2C4" vertical={false} />
+              <XAxis dataKey="d" tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={{ stroke: "#D9D2C4" }} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
