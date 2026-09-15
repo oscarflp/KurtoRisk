@@ -1915,3 +1915,215 @@ function Dashboard({ onBack, portfolios, savePortfolio, deletePortfolio, jumpTo 
                   <div className="qt-disp" style={{ fontSize: 22, fontWeight: 700 }}>{port.fan[port.fan.length - 1].p95.toFixed(2)}</div>
                   <div style={{ fontSize: 10.5, color: "var(--sub)" }}>P95</div>
                 </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 30, marginTop: 20, flexWrap: "wrap" }}>
+                <div className="qt-stat" style={{ paddingLeft: 0, borderLeft: "none" }}><div style={{ fontSize: 9.5, color: "var(--sub)" }}>P(LOSS &gt; 10%, 60D)</div><div style={{ fontSize: 18, fontWeight: 600, color: "var(--neg)" }}>{(port.probLoss10 * 100).toFixed(1)}%</div></div>
+                <div className="qt-stat"><div style={{ fontSize: 9.5, color: "var(--sub)" }}>P(POSITIVE, 60D)</div><div style={{ fontSize: 18, fontWeight: 600, color: "var(--pos)" }}>{(port.probGain * 100).toFixed(1)}%</div></div>
+                <div className="qt-stat">
+                  <div style={{ fontSize: 9.5, color: "var(--sub)" }}>SKEWNESS</div>
+                  <div style={{ fontSize: 18, fontWeight: 600 }}>{port.skew.toFixed(2)}</div>
+                  <div style={{ fontSize: 10, color: "var(--sub)", maxWidth: 160 }}>
+                    {port.skew < -0.5 ? "Pronounced left tail — sharp downside asymmetry." : port.skew < -0.1 ? "Slight left tail — moderate downside asymmetry." : port.skew > 0.5 ? "Pronounced right tail — upside surprises more likely." : port.skew > 0.1 ? "Slight right tail." : "Roughly symmetric."}
+                  </div>
+                </div>
+                <div className="qt-stat">
+                  <div style={{ fontSize: 9.5, color: "var(--sub)" }}>KURTOSIS (excess)</div>
+                  <div style={{ fontSize: 18, fontWeight: 600 }}>{port.kurt.toFixed(2)}</div>
+                  <div style={{ fontSize: 10, color: "var(--sub)", maxWidth: 160 }}>
+                    {port.kurt > 3 ? "Strongly leptokurtic — very fat tails, extreme shocks far more likely than normal." : port.kurt > 1 ? "Leptokurtic — fat tails, more extreme shocks than a normal law." : port.kurt > -0.5 ? "Close to normal tail thickness." : "Platykurtic — thinner tails than normal."}
+                  </div>
+                </div>
+                <div className="qt-stat">
+                  <div style={{ fontSize: 9.5, color: "var(--sub)" }}>MODEL FRAGILITY</div>
+                  <div style={{ fontSize: 18, fontWeight: 600, color: port.fragility === "Low" ? "var(--pos)" : port.fragility === "Medium" ? "var(--accent)" : "var(--neg)" }}>{port.fragility}</div>
+                  <div style={{ fontSize: 10, color: "var(--sub)", maxWidth: 170 }}>
+                    {port.fragility === "Low" ? "Stable VaR estimate across quarters of history." : port.fragility === "Medium" ? "Some variation in VaR across sub-periods." : "VaR estimate swings a lot depending on the window — treat it with caution."}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab === "compare" && (
+            <CompareTab key="cmp" portfolios={portfolios || []} currentSelected={selected} currentWeights={weights} />
+          )}
+
+          {tab === "stress" && (
+            <div key="stress" className="qt-section">
+              <div className="qt-h">SCENARIO STRESS TESTS</div>
+              <table className="qt-t">
+                <thead><tr><th>Scenario</th><th>Est. impact</th></tr></thead>
+                <tbody>{port.stress.map((s, i) => <tr key={i}><td>{s.name}</td><td style={{ color: s.impact < 0 ? "var(--neg)" : "var(--pos)", fontWeight: 600 }}>{fmtPct(s.impact)}</td></tr>)}</tbody>
+              </table>
+            </div>
+          )}
+
+          {tab === "report" && (
+            <div key="report" className="qt-section" style={{ maxWidth: 740 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+                <div className="qt-h" style={{ fontSize: 18 }}>PORTFOLIO NOTE</div>
+                <button className="qt-btn" type="button" onClick={() => {
+                  const text = `ASTERISK RISK — PORTFOLIO NOTE\n\n` +
+                    `This portfolio of ${selected.length} holdings scores ${port.riskScore}/100 (${riskLabel(port.riskScore).toLowerCase()}). Annualised return ${fmtPct(port.annRet)}, volatility ${fmtPct(port.annVol)} (EWMA forecast ${fmtPct(port.ewmaVolFwd)}), Sharpe ${port.sharpe.toFixed(2)}, Sortino ${port.sortino.toFixed(2)}, Treynor ${isNaN(port.treynor) ? "n/a" : port.treynor.toFixed(2)}.\n\n` +
+                    `Max drawdown ${fmtPct(port.mdd)} (Ulcer index ${fmtPct(port.ulcer / 100)}). Historical VaR95 ${fmtPct(port.var95)}, Cornish-Fisher-adjusted VaR95 ${fmtPct(port.cfVar)}, CVaR95 ${fmtPct(port.cvar95)}, Omega ${isFinite(port.omega) ? port.omega.toFixed(2) : "inf"}.\n\n` +
+                    `Beta ${port.beta.toFixed(2)} (downside ${isNaN(port.dBeta) ? "n/a" : port.dBeta.toFixed(2)}), alpha ${fmtPct(port.alpha)}, tracking error ${fmtPct(port.trackingError)}. 60-day Monte Carlo: ${(port.probLoss10 * 100).toFixed(1)}% probability of a loss exceeding 10%, ${(port.probGain * 100).toFixed(1)}% probability of a positive outcome.\n\n` +
+                    port.alerts.map((a) => a.text).join(" ") + `\n\nHoldings: ${selected.join(", ")}\n\nSimulated data. Not investment advice.`;
+                  downloadText("kurtorisk_portfolio_note.txt", text);
+                }}>download report</button>
+              </div>
+              <p style={{ fontSize: 13, lineHeight: 1.8 }}>
+                This portfolio of {selected.length} holdings scores {port.riskScore}/100 ({riskLabel(port.riskScore).toLowerCase()}). Annualised return {fmtPct(port.annRet)},
+                volatility {fmtPct(port.annVol)} (EWMA forecast {fmtPct(port.ewmaVolFwd)}), Sharpe {port.sharpe.toFixed(2)}, Sortino {port.sortino.toFixed(2)}, Treynor {isNaN(port.treynor) ? "n/a" : port.treynor.toFixed(2)}.
+              </p>
+              <p style={{ fontSize: 13, lineHeight: 1.8 }}>
+                Max drawdown {fmtPct(port.mdd)} (Ulcer index {fmtPct(port.ulcer / 100)}). Historical VaR95 {fmtPct(port.var95)}, Cornish-Fisher-adjusted VaR95 {fmtPct(port.cfVar)}, CVaR95 {fmtPct(port.cvar95)}, Omega {isFinite(port.omega) ? port.omega.toFixed(2) : "∞"}.
+              </p>
+              <p style={{ fontSize: 13, lineHeight: 1.8 }}>
+                Beta {port.beta.toFixed(2)} (downside {isNaN(port.dBeta) ? "n/a" : port.dBeta.toFixed(2)}), alpha {fmtPct(port.alpha)}, tracking error {fmtPct(port.trackingError)}.
+                60-day Monte Carlo: {(port.probLoss10 * 100).toFixed(1)}% probability of a loss exceeding 10%, {(port.probGain * 100).toFixed(1)}% probability of a positive outcome.
+              </p>
+              <p style={{ fontSize: 13, lineHeight: 1.8 }}>{port.alerts.map((a) => a.text).join(" ")}</p>
+            </div>
+          )}
+
+          <div style={{ paddingTop: 20, fontSize: 10, color: "var(--sub)", lineHeight: 1.5 }}>
+            All prices, returns and simulations are generated for this demo, not real market data. Nothing here is investment advice or a recommendation to buy or sell any security.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================== APP ================================== */
+
+function CommandPalette({ onClose, setView, onJumpTicker }) {
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState(0);
+  const PAGES = [
+    { label: "Home", view: "landing" },
+    { label: "Analyse (Terminal)", view: "terminal" },
+    { label: "Market Movers", view: "movers" },
+    { label: "Methodology", view: "method" },
+    { label: "Model Validation", view: "validation" },
+    { label: "Glossary", view: "glossary" },
+  ];
+  const pageMatches = PAGES.filter((p) => p.label.toLowerCase().includes(q.toLowerCase()));
+  const tickerMatches = q.length
+    ? STOCK_UNIVERSE.filter((s) => s.t.toLowerCase().includes(q.toLowerCase()) || s.name.toLowerCase().includes(q.toLowerCase())).slice(0, 6)
+    : [];
+  const allItems = [...pageMatches.map((p) => ({ kind: "page", ...p })), ...tickerMatches.map((s) => ({ kind: "ticker", t: s.t, name: s.name }))];
+  useEffect(() => { setSel(0); }, [q]);
+  function activate(item) {
+    if (!item) return;
+    if (item.kind === "page") { setView(item.view); onClose(); }
+    else { onJumpTicker(item.t); onClose(); }
+  }
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(allItems.length - 1, s + 1)); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(0, s - 1)); }
+      else if (e.key === "Enter") { e.preventDefault(); activate(allItems[sel]); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allItems, sel, onClose]);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,32,27,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "12vh", zIndex: 60 }} onClick={onClose}>
+      <div className="ay-root" style={{ background: "#F6F3EC", width: 480, maxWidth: "90vw", border: "1px solid #14201B", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }} onClick={(e) => e.stopPropagation()}>
+        <input autoFocus className="ay-sans" placeholder="Jump to a page or a ticker... (↑↓ Enter)" value={q} onChange={(e) => setQ(e.target.value)}
+          style={{ width: "100%", border: "none", borderBottom: "1px solid rgba(20,32,27,0.15)", padding: "14px 16px", fontSize: 14, boxSizing: "border-box", outline: "none", background: "transparent" }} />
+        <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+          {pageMatches.map((p) => {
+            const i = allItems.findIndex((x) => x.kind === "page" && x.view === p.view);
+            return (
+              <div key={p.view} className="ay-sans" style={{ padding: "10px 16px", cursor: "pointer", fontSize: 13.5, background: i === sel ? "rgba(31,111,92,0.1)" : "transparent" }}
+                onMouseEnter={() => setSel(i)} onClick={() => activate({ kind: "page", ...p })} onMouseDown={(e) => e.preventDefault()}>{p.label}</div>
+            );
+          })}
+          {tickerMatches.length > 0 && <div className="ay-sans" style={{ padding: "8px 16px 2px", fontSize: 10, color: "#8A9690" }}>TICKERS</div>}
+          {tickerMatches.map((s) => {
+            const i = allItems.findIndex((x) => x.kind === "ticker" && x.t === s.t);
+            return (
+              <div key={s.t} className="ay-mono" style={{ padding: "9px 16px", cursor: "pointer", fontSize: 13, background: i === sel ? "rgba(31,111,92,0.1)" : "transparent" }}
+                onMouseEnter={() => setSel(i)} onClick={() => activate({ kind: "ticker", t: s.t })}>
+                <b>{s.t}</b> <span className="ay-sans" style={{ color: "#8A9690" }}>{s.name}</span>
+              </div>
+            );
+          })}
+          {!pageMatches.length && !tickerMatches.length && <div className="ay-sans" style={{ padding: "14px 16px", fontSize: 12.5, color: "#8A9690" }}>No matches</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function AsteriskApp() {
+  const [view, setView] = useState("landing");
+  const [user, setUser] = useState(null);
+  const [signInOpen, setSignInOpen] = useState(false);
+  const [cash, setCash] = useState(100000);
+  const [positions, setPositions] = useState({});
+  const [tradingLoaded, setTradingLoaded] = useState(false);
+  const [portfolios, setPortfolios] = useState([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [jumpTo, setJumpTo] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage.get("paper-trading", false);
+        if (res && res.value) { const d = JSON.parse(res.value); setCash(d.cash ?? 100000); setPositions(d.positions ?? {}); }
+      } catch (e) { /* nothing saved yet */ }
+      setTradingLoaded(true);
+      try {
+        const res2 = await window.storage.get("portfolios", false);
+        if (res2 && res2.value) setPortfolios(JSON.parse(res2.value));
+      } catch (e) { /* nothing saved yet */ }
+    })();
+  }, []);
+  useEffect(() => {
+    if (!tradingLoaded) return;
+    window.storage.set("paper-trading", JSON.stringify({ cash, positions }), false).catch(() => {});
+  }, [cash, positions, tradingLoaded]);
+
+  useEffect(() => {
+    function onKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen(true); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  async function savePortfolio(name, tickers, weights) {
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const next = [...portfolios, { id, name, tickers, weights, createdAt: Date.now() }];
+    setPortfolios(next);
+    try { await window.storage.set("portfolios", JSON.stringify(next), false); } catch (e) { /* save failed */ }
+    return id;
+  }
+  async function deletePortfolio(id) {
+    const next = portfolios.filter((p) => p.id !== id);
+    setPortfolios(next);
+    try { await window.storage.set("portfolios", JSON.stringify(next), false); } catch (e) { /* save failed */ }
+  }
+
+  return (
+    <div className="ay-root" style={{ fontFamily: "'Source Serif 4', Georgia, serif", background: "#F6F3EC", color: "#14201B", minHeight: "100%" }}>
+      <style>{GLOBAL_CSS}</style>
+      {view !== "terminal" && <Nav view={view} setView={setView} user={user} onSignIn={() => setSignInOpen(true)} />}
+      {view === "landing" && <Landing setView={setView} />}
+      {view === "movers" && <MarketMovers setView={setView} cash={cash} setCash={setCash} positions={positions} setPositions={setPositions} />}
+      {view === "method" && <Methodology setView={setView} />}
+      {view === "validation" && <ModelValidation setView={setView} />}
+      {view === "glossary" && <Glossary />}
+      {view === "terminal" && <Dashboard onBack={() => setView("landing")} portfolios={portfolios} savePortfolio={savePortfolio} deletePortfolio={deletePortfolio} jumpTo={jumpTo} />}
+      {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} onSubmit={(n) => { setUser(n); setSignInOpen(false); }} />}
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} setView={setView} onJumpTicker={(t) => { setView("terminal"); setJumpTo({ t, ts: Date.now() }); }} />}
+      <div className="ay-sans" style={{ position: "fixed", bottom: 10, right: 14, fontSize: 10, color: "#B7AE9E", zIndex: 5 }}>⌘K to search</div>
+    </div>
+  );
+}
