@@ -211,3 +211,216 @@ function omegaRatio(rets, threshold = 0) {
 function ulcerIndex(ddSeriesPct) { return Math.sqrt(mean(ddSeriesPct.map((d) => (d / 100) ** 2))) * 100; }
 function ewmaVol(rets, lambda = 0.94) {
   let v = rets[0] ** 2;
+  for (let i = 1; i < rets.length; i++) v = lambda * v + (1 - lambda) * rets[i - 1] ** 2;
+  return Math.sqrt(v * 252);
+}
+function downsideBeta(portRets, mktRets) {
+  const idx = mktRets.map((m, i) => (m < 0 ? i : -1)).filter((i) => i >= 0);
+  if (idx.length < 5) return NaN;
+  const p = idx.map((i) => portRets[i]), m = idx.map((i) => mktRets[i]);
+  return covariance(p, m) / (std(m) ** 2);
+}
+function invertMatrix(M) {
+  const n = M.length;
+  const A = M.map((row, i) => [...row.map((v, j) => v + (i === j ? 1e-6 : 0)), ...Array.from({ length: n }, (_, j) => (i === j ? 1 : 0))]);
+  for (let col = 0; col < n; col++) {
+    let piv = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+    if (Math.abs(A[piv][col]) < 1e-12) return null;
+    [A[col], A[piv]] = [A[piv], A[col]];
+    const d = A[col][col];
+    for (let j = 0; j < 2 * n; j++) A[col][j] /= d;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = A[r][col];
+      for (let j = 0; j < 2 * n; j++) A[r][j] -= f * A[col][j];
+    }
+  }
+  return A.map((row) => row.slice(n));
+}
+function matVec(M, v) { return M.map((row) => row.reduce((s, x, j) => s + x * v[j], 0)); }
+
+const STRESS_SCENARIOS = [
+  { name: "Semiconductor / AI correction", impact: (s) => (s.sector === "Semiconductors" ? -0.18 : s.sector === "Technology" ? -0.10 : -0.03) },
+  { name: "Rate shock, +150 bps", impact: (s) => (s.sector === "Financials" ? 0.04 : s.sector === "Technology" || s.sector === "Semiconductors" ? -0.08 : s.sector === "Defensive" ? -0.02 : -0.03) },
+  { name: "Broad market drawdown, -20%", impact: (s) => s.beta * -0.20 },
+  { name: "Oil price spike, +40%", impact: (s) => (s.sector === "Energy" ? 0.12 : s.sector === "Industrials" ? -0.04 : s.sector === "Consumer" ? -0.03 : -0.01) },
+];
+function riskColor(score) { return score >= 70 ? "#A6321B" : score >= 45 ? "#9C6B24" : "#1F6F5C"; }
+function riskLabel(score) { return score >= 70 ? "Elevated" : score >= 45 ? "Moderate" : "Contained"; }
+function scoreClip(x) { return Math.max(0, Math.min(100, x)); }
+function fmtPct(x, d = 1) { return `${(x * 100).toFixed(d)}%`; }
+function downloadText(filename, content, mime = "text/plain") {
+  try {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (e) { /* download not available in this environment */ }
+}
+function weightsObjToArray(tickers, weightsObj) {
+  const raw = tickers.map((t) => Number(weightsObj[t]) || 0);
+  const sum = raw.reduce((a, b) => a + b, 0) || 1;
+  return raw.map((x) => x / sum);
+}
+const SECTORS_ORDER = ["Semiconductors", "Technology", "Communication", "Financials", "Healthcare", "Consumer", "Defensive", "Energy", "Industrials", "Automotive"];
+
+const GLOBAL_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+  .ay-disp { font-family:'Fraunces', Georgia, serif; }
+  .ay-mono { font-family:'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric:tabular-nums; }
+  .ay-sans { font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
+  .ay-nav a { color:#14201B; text-decoration:none; cursor:pointer; }
+  .ay-nav a.active { border-bottom:2px solid #1F6F5C; padding-bottom:3px; }
+  .ay-grid { position:absolute; inset:0; background-image: linear-gradient(rgba(20,32,27,0.05) 1px, transparent 1px); background-size: 100% 34px; pointer-events:none; }
+  @keyframes ay-marquee { from { transform:translateX(0); } to { transform:translateX(-50%); } }
+  .ay-track { display:flex; width:max-content; animation:ay-marquee 36s linear infinite; }
+  .ay-btn { cursor:pointer; padding:13px 22px; font-family:'IBM Plex Mono'; font-size:12px; letter-spacing:0.6px; border:1.4px solid #14201B; position:relative; background:none; color:#14201B; }
+  .ay-btn.solid { background:#14201B; color:#F6F3EC; transition:background 0.2s; }
+  .ay-btn.solid:hover { background:#1F6F5C; border-color:#1F6F5C; }
+  .ay-btn .arrow { display:inline-block; transition:transform 0.2s ease; }
+  .ay-btn:hover .arrow { transform:translateX(4px); }
+  .ay-btn2 { cursor:pointer; background:#1F6F5C; color:#F2F0E8; border:none; padding:10px 14px; font-family:'IBM Plex Mono'; font-size:11.5px; letter-spacing:0.5px; }
+  .ay-btn2:hover { background:#268066; }
+  @keyframes ay-blink { 0%,100% { opacity:1; } 50% { opacity:0.25; } }
+  .ay-live { display:inline-block; width:7px; height:7px; border-radius:50%; background:#1F6F5C; animation:ay-blink 1.6s ease-in-out infinite; margin-right:6px; }
+  table.ay-t { border-collapse:collapse; width:100%; font-size:13px; }
+  table.ay-t th { text-align:right; font-family:'IBM Plex Mono'; font-weight:500; font-size:10.5px; color:#5C6B62; padding:8px 10px; border-bottom:1px solid #14201B; cursor:pointer; user-select:none; }
+  table.ay-t td { text-align:right; padding:9px 10px; border-bottom:1px solid rgba(20,32,27,0.12); }
+  table.ay-t th:first-child, table.ay-t td:first-child, table.ay-t th:nth-child(2), table.ay-t td:nth-child(2) { text-align:left; }
+  table.ay-t tbody tr:hover { background:rgba(20,32,27,0.03); }
+
+  /* dark terminal (dashboard) */
+  .qt-root { --bg:#F6F3EC; --panel:#FFFFFF; --ink:#14201B; --sub:#5C6B62; --hair:#D9D2C4; --pos:#1F6F5C; --neg:#A6321B; --accent:#9C6B24;
+    font-family:'IBM Plex Mono', ui-monospace, monospace; color:var(--ink); min-height:100%; position:relative; overflow-x:hidden;
+    background: radial-gradient(ellipse 900px 500px at 15% -5%, rgba(31,111,92,0.08), transparent 60%),
+                radial-gradient(ellipse 800px 500px at 90% 10%, rgba(156,107,36,0.07), transparent 55%),
+                radial-gradient(ellipse 700px 600px at 50% 100%, rgba(166,50,27,0.06), transparent 60%),
+                var(--bg); }
+  .qt-disp { font-family:'Fraunces', sans-serif; }
+  @keyframes qt-pulse { 0%,100% { text-shadow:0 0 18px currentColor; } 50% { text-shadow:0 0 34px currentColor, 0 0 6px currentColor; } }
+  .qt-pulse { animation: qt-pulse 2.6s ease-in-out infinite; }
+  @keyframes qt-blink { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+  .qt-blink { animation: qt-blink 1.6s ease-in-out infinite; }
+  @keyframes qt-fadein { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+  .qt-insight { animation: qt-fadein 0.5s ease; display:inline-block; }
+  .qt-tickerwrap { overflow:hidden; border-bottom:1px solid var(--hair); background:#10201C; }
+  .qt-tickertrack { display:flex; width:max-content; animation: qt-marquee 40s linear infinite; padding:9px 0; }
+  @keyframes qt-marquee { from { transform:translateX(0); } to { transform:translateX(-50%); } }
+  .qt-tick { display:inline-flex; align-items:baseline; gap:6px; padding:0 18px; font-size:12px; border-right:1px solid rgba(242,240,232,0.14); color:#9FB3A8; }
+  .qt-tick b { color:#F2F0E8; }
+  .qt-tickp { transition:color 0.4s ease; font-weight:600; }
+  .qt-hair { border:none; border-top:1px solid var(--hair); margin:0; }
+  .qt-section { padding:30px 0; border-bottom:1px solid var(--hair); }
+  .qt-section:last-child { border-bottom:none; }
+  .qt-h { font-family:'Fraunces'; font-weight:600; font-size:15px; letter-spacing:0.2px; margin:0 0 3px; color:var(--ink); }
+  .qt-dek { font-size:11.5px; color:var(--sub); margin:0 0 16px; }
+  table.qt-t { border-collapse:collapse; width:100%; font-size:12px; }
+  table.qt-t th { text-align:right; font-weight:500; font-size:10px; color:var(--sub); padding:6px 9px; border-bottom:1px solid var(--hair); }
+  table.qt-t td { text-align:right; padding:8px 9px; border-bottom:1px solid var(--hair); }
+  table.qt-t th:first-child, table.qt-t td:first-child, table.qt-t th:nth-child(2), table.qt-t td:nth-child(2) { text-align:left; font-family:'Fraunces'; }
+  table.qt-t tbody tr:hover { background:rgba(231,227,216,0.04); }
+  .qt-tab { cursor:pointer; padding:10px 0; font-family:'Fraunces'; font-size:12.5px; border:none; background:none; color:var(--sub); border-bottom:2px solid transparent; }
+  .qt-tab.on { color:var(--ink); border-bottom:2px solid var(--accent); }
+  .qt-tab:hover { color:var(--ink); }
+  .qt-chip { cursor:pointer; padding:4px 9px; font-size:11px; border:1px solid var(--hair); background:transparent; color:var(--ink); transition:all 0.15s ease; border-radius:3px; }
+  .qt-chip:hover { border-color:var(--accent); color:var(--accent); }
+  .qt-chip.on { background:var(--accent); color:#F6F3EC; border-color:var(--accent); box-shadow:0 0 14px rgba(156,107,36,0.35); }
+  .qt-stat { padding:0 16px; border-left:1px solid var(--hair); }
+  .qt-stat:first-child { border-left:none; padding-left:0; }
+  input.qt-in { border:none; border-bottom:1px solid var(--hair); background:transparent; padding:5px 2px; color:var(--ink); font-size:12px; font-family:'IBM Plex Mono'; }
+  input.qt-wt { width:48px; border:none; border-bottom:1px solid var(--hair); background:transparent; text-align:right; color:var(--ink); font-size:12px; font-family:'IBM Plex Mono'; }
+  .qt-btn { cursor:pointer; border:1px solid var(--hair); background:none; color:var(--ink); padding:6px 12px; font-family:'Fraunces'; font-size:11px; }
+  .qt-btn.solid { background:var(--accent); color:#F6F3EC; border-color:var(--accent); font-weight:600; }
+  .qt-btn:hover { border-color:var(--accent); }
+  .qt-note { border-left:2px solid var(--accent); padding-left:12px; }
+`;
+
+/* ============================ LIVE WIDGETS ================================ */
+
+function useLiveSeries(seed, len = 30, tick = 850) {
+  const [series, setSeries] = useState(() => Array.from({ length: len }, () => seed));
+  useEffect(() => {
+    const id = setInterval(() => {
+      setSeries((prev) => {
+        const last = prev[prev.length - 1];
+        const nv = Math.max(0.5, last + (Math.random() - 0.47) * last * 0.01);
+        return [...prev.slice(1), nv];
+      });
+    }, tick);
+    return () => clearInterval(id);
+  }, [tick]);
+  return series;
+}
+function useLiveValue(tick = 1200) {
+  const [v, setV] = useState(() => Math.random() * 2 - 1);
+  useEffect(() => {
+    const id = setInterval(() => setV((prev) => Math.max(-1, Math.min(1, prev + (Math.random() - 0.5) * 0.5))), tick);
+    return () => clearInterval(id);
+  }, [tick]);
+  return v;
+}
+function useAnimatedNumber(target, duration = 700) {
+  const [display, setDisplay] = useState(target);
+  const fromRef = useRef(target);
+  useEffect(() => {
+    const from = fromRef.current;
+    const start = performance.now();
+    let raf;
+    function step(now) {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(from + (target - from) * eased);
+      if (t < 1) raf = requestAnimationFrame(step);
+      else fromRef.current = target;
+    }
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+  return display;
+}
+function RowSpark({ points, color, w = 90, h = 26 }) {
+  const min = Math.min(...points), max = Math.max(...points);
+  const range = max - min || 1;
+  const path = points.map((p, i) => `${(i / (points.length - 1)) * w},${h - ((p - min) / range) * h}`).join(" ");
+  return <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} preserveAspectRatio="none"><polyline points={path} fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+}
+function AnimatedStat({ value, fmt }) {
+  const v = useAnimatedNumber(value);
+  return <>{fmt(v)}</>;
+}
+
+function RotatingInsights({ port }) {
+  const [idx, setIdx] = useState(0);
+  const insights = useMemo(() => {
+    const top = [...port.rows].sort((a, b) => b.varShare - a.varShare)[0];
+    const msgs = [
+      `Portfolio beta of ${port.beta.toFixed(2)} — ${port.beta > 1.1 ? "amplifying" : port.beta < 0.9 ? "dampening" : "tracking"} market moves.`,
+      `${top.t} contributes ${top.varShare.toFixed(0)}% of total portfolio VaR on a ${top.weight.toFixed(1)}% weight.`,
+      `EWMA volatility forecast: ${fmtPct(port.ewmaVolFwd)}, vs. ${fmtPct(port.annVol)} realised.`,
+      `Monte Carlo: ${(port.probLoss10 * 100).toFixed(1)}% probability of a loss beyond 10% in 60 sessions.`,
+      `Model fragility on this window: ${port.fragility}.`,
+      `Sharpe ${port.sharpe.toFixed(2)} · Sortino ${port.sortino.toFixed(2)} · Calmar ${port.calmar.toFixed(2)}.`,
+    ];
+    return msgs;
+  }, [port]);
+  useEffect(() => {
+    const id = setInterval(() => setIdx((i) => (i + 1) % insights.length), 4200);
+    return () => clearInterval(id);
+  }, [insights.length]);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderBottom: "1px solid var(--hair)", overflow: "hidden" }}>
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} className="qt-blink" />
+      <span key={idx} className="qt-insight" style={{ fontSize: 12.5, color: "var(--sub)" }}>{insights[idx]}</span>
+    </div>
+  );
+}
+
+function BigSpark({ points, color }) {
+  const w = 400, h = 130;
+  const min = Math.min(...points), max = Math.max(...points);
+  const range = max - min || 1;
+  const path = points.map((p, i) => `${(i / (points.length - 1)) * w},${h - ((p - min) / range) * (h - 10) - 5}`).join(" ");
