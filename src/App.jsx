@@ -1489,3 +1489,216 @@ function Dashboard({ onBack, portfolios, savePortfolio, deletePortfolio, jumpTo 
     }
     const fan = [];
     for (let d = 0; d <= MC_DAYS; d++) {
+      const vals = paths.map((p) => p[d]).sort((a, b) => a - b);
+      fan.push({ d, p05: quantile(vals, 0.05), p25: quantile(vals, 0.25), p50: quantile(vals, 0.5), p75: quantile(vals, 0.75), p95: quantile(vals, 0.95) });
+    }
+    const finalVals = paths.map((p) => p[MC_DAYS]);
+    const probLoss10 = finalVals.filter((v) => v < 90).length / MC_PATHS;
+    const probGain = finalVals.filter((v) => v > 100).length / MC_PATHS;
+
+    const quarterLen = Math.floor(portRets.length / 4);
+    const quarterVars = [0, 1, 2, 3].map((q) => {
+      const chunk = portRets.slice(q * quarterLen, (q + 1) * quarterLen);
+      const s = [...chunk].sort((a, b) => a - b);
+      return Math.abs(quantile(s, 0.05));
+    });
+    const qMean = mean(quarterVars);
+    const fragilityCV = qMean ? std(quarterVars) / qMean : 0;
+    const fragility = fragilityCV < 0.20 ? "Low" : fragilityCV < 0.45 ? "Medium" : "High";
+
+    const alerts = [];
+    const sortedByVar = [...rows].sort((a, b) => b.varShare - a.varShare);
+    if (sortedByVar[0] && sortedByVar[0].varShare > 35) alerts.push({ sev: "high", text: `${sortedByVar[0].t} alone accounts for ${sortedByVar[0].varShare.toFixed(0)}% of total portfolio VaR.` });
+    let maxPairCorr = -1, pairA = null, pairB = null;
+    selected.forEach((a) => selected.forEach((b) => { if (a < b && corr[a][b] > maxPairCorr) { maxPairCorr = corr[a][b]; pairA = a; pairB = b; } }));
+    if (maxPairCorr > 0.6) alerts.push({ sev: "medium", text: `${pairA} and ${pairB} are highly correlated (${maxPairCorr.toFixed(2)}) — limited diversification between them.` });
+    if (beta > 1.3) alerts.push({ sev: "medium", text: `Portfolio beta of ${beta.toFixed(2)} means moves are amplified relative to the broad market.` });
+    if (skew < -0.3) alerts.push({ sev: "medium", text: `Negative skew (${skew.toFixed(2)}) — large losses are more likely than large gains of the same size.` });
+    if (kurt > 1) alerts.push({ sev: "low", text: `Excess kurtosis of ${kurt.toFixed(2)} points to fatter tails than a normal distribution — historical VaR may understate true risk.` });
+    if (annVol > 0.30) alerts.push({ sev: "high", text: `Annualised volatility of ${fmtPct(annVol)} is high relative to a typical diversified equity portfolio (~15-18%).` });
+    if (!alerts.length) alerts.push({ sev: "low", text: "No major risk flags at current settings — metrics sit within typical ranges." });
+
+    const rollVol = rollingVolSeries(portRets, 20);
+    const histBins = [
+      { bin: "< -4%", lo: -Infinity, hi: -0.04 }, { bin: "-4/-3", lo: -0.04, hi: -0.03 }, { bin: "-3/-2", lo: -0.03, hi: -0.02 },
+      { bin: "-2/-1", lo: -0.02, hi: -0.01 }, { bin: "-1/0", lo: -0.01, hi: 0 }, { bin: "0/1", lo: 0, hi: 0.01 },
+      { bin: "1/2", lo: 0.01, hi: 0.02 }, { bin: "2/3", lo: 0.02, hi: 0.03 }, { bin: "3/4", lo: 0.03, hi: 0.04 }, { bin: "> 4%", lo: 0.04, hi: Infinity },
+    ].map((b) => ({ bin: b.bin, count: portRets.filter((r) => r >= b.lo && r < b.hi).length, isVar: b.hi <= var95 + 0.005 && b.lo < 0 }));
+
+    return {
+      annVol, annRet, mdd, var95, cvar95, sharpe, sortino, calmar, beta, riskScore,
+      skew, kurt, cfVar, omega, ulcer, ewmaVolFwd, treynor, dBeta,
+      rows, corr, secAlloc, stress, alerts, alpha, trackingError, infoRatio, optimizer,
+      fan, probLoss10, probGain, fragility, fragilityCV,
+      chart: portRets.map((r, i) => ({ i, w: i % 21 === 0 ? `D${i}` : "", vol: rollVol[i], dd: dd[i], price: portPrices[i + 1], bench: marketPrices[i + 1] })),
+      hist: histBins,
+    };
+  }, [selected, weights]);
+
+  const TABS = [["overview", "Overview"], ["positions", "Positions"], ["technical", "Technical"], ["correlation", "Correlation"], ["riskreturn", "Risk/Return"], ["optimizer", "Optimizer"], ["montecarlo", "Simulation"], ["compare", "Compare"], ["stress", "Stress"], ["report", "Report"]];
+
+  return (
+    <div className="qt-root">
+      <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 30px", fontSize: 10.5, color: "var(--sub)", borderBottom: "1px solid var(--hair)" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span className="qt-blink" style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--pos)", display: "inline-block" }} />LIVE · ENGINE: bootstrap simulation · 252 sessions · recalculated on selection</span>
+        <span>MKT PROXY {marketPrices[marketPrices.length - 1].toFixed(1)} · not investment advice</span>
+      </div>
+      <div style={{ padding: "20px 30px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+        <div className="qt-disp" style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.3px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }} onClick={onBack}>
+          <span style={{ width: 9, height: 9, background: "var(--accent)", display: "inline-block" }} />
+          QUANT / RISK TERMINAL
+        </div>
+        <button className="qt-btn" type="button" onClick={onBack}>← back to site</button>
+      </div>
+      <hr className="qt-hair" />
+      <LiveTickerDark />
+
+      <div style={{ padding: "16px 30px 20px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
+          <span style={{ fontSize: 11.5, color: "var(--sub)" }}>UNIVERSE — select holdings [{selected.length}]</span>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input className="qt-in" placeholder="search..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 180 }} />
+            <button className="qt-btn" type="button" onClick={loadExample}>load example</button>
+            {selected.length > 0 && !showSaveBox && <button className="qt-btn" type="button" onClick={() => setShowSaveBox(true)}>save as...</button>}
+            {showSaveBox && (
+              <>
+                <input className="qt-in" placeholder="portfolio name" value={portName} onChange={(e) => setPortName(e.target.value)} style={{ width: 130 }} />
+                <button className="qt-btn solid" type="button" onClick={handleSavePortfolio}>save</button>
+                <button className="qt-btn" type="button" onClick={() => setShowSaveBox(false)}>cancel</button>
+              </>
+            )}
+            {savedFlash && <span style={{ fontSize: 11, color: "var(--pos)" }}>saved ✓</span>}
+            {portfolios && portfolios.length > 0 && (
+              <button className="qt-btn" type="button" onClick={() => setShowManage((v) => !v)}>{showManage ? "hide saved" : `manage saved (${portfolios.length})`}</button>
+            )}
+          </div>
+        </div>
+
+        {showManage && portfolios && portfolios.length > 0 && (
+          <div style={{ border: "1px solid var(--hair)", padding: "10px 12px", marginBottom: 12 }}>
+            {portfolios.map((p) => (
+              <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--hair)" }}>
+                <span style={{ fontSize: 12.5 }}>{p.name} <span style={{ color: "var(--sub)", fontSize: 11 }}>({p.tickers.length} holdings)</span></span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="qt-btn" type="button" onClick={() => loadPortfolio(p)}>load</button>
+                  <button className="qt-btn" type="button" style={{ color: "var(--neg)", borderColor: "var(--neg)" }} onClick={() => deletePortfolio(p.id)}>delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 100, overflowY: "auto" }}>
+          {filtered.map((s) => <span key={s.t} className={`qt-chip ${selected.includes(s.t) ? "on" : ""}`} onClick={() => toggle(s.t)}>{s.t}</span>)}
+        </div>
+      </div>
+
+      {!port && <div style={{ padding: "50px 30px", maxWidth: 640 }}><p className="qt-dek" style={{ fontSize: 13 }}>Select holdings from the universe above, or load the example set, to run the model.</p></div>}
+
+      {port && (
+        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 30px 60px" }}>
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", padding: "6px 0 20px", borderBottom: "1px solid var(--hair)" }}>
+            <div style={{ minWidth: 150 }}>
+              <div className="qt-disp qt-pulse" style={{ fontSize: 58, fontWeight: 700, lineHeight: 0.95, color: riskColor(port.riskScore) }}><AnimatedStat value={port.riskScore} fmt={(v) => Math.round(v)} /></div>
+              <div style={{ fontSize: 11, color: "var(--sub)" }}>RISK SCORE · {riskLabel(port.riskScore).toUpperCase()}</div>
+            </div>
+            {(() => {
+              const techScore = port.rows.reduce((s, r) => s + computeTechnicals(PRICES[r.t]).score * (r.weight / 100), 0);
+              const techLabel = techScore >= 1.3 ? "STRONG BUY" : techScore >= 0.4 ? "BUY" : techScore >= -0.4 ? "NEUTRAL" : techScore >= -1.3 ? "SELL" : "STRONG SELL";
+              const techColor = techScore >= 0.4 ? "var(--pos)" : techScore <= -0.4 ? "var(--neg)" : "var(--accent)";
+              return (
+                <div style={{ minWidth: 170, cursor: "pointer" }} onClick={() => setTab("technical")}>
+                  <div className="qt-disp" style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.1, color: techColor }}>{techLabel}</div>
+                  <div style={{ fontSize: 11, color: "var(--sub)" }}>TECHNICAL SIGNAL · view detail →</div>
+                </div>
+              );
+            })()}
+            <div style={{ flex: 1, minWidth: 340, display: "flex", flexWrap: "wrap", rowGap: 12 }}>
+              {[
+                ["RET", port.annRet, (v) => fmtPct(v)], ["VOL", port.annVol, (v) => fmtPct(v)], ["EWMA VOL", port.ewmaVolFwd, (v) => fmtPct(v)], ["MAX DD", port.mdd, (v) => fmtPct(v)],
+                ["VaR95", port.var95, (v) => fmtPct(v)], ["CVaR95", port.cvar95, (v) => fmtPct(v)], ["CF-VaR95", port.cfVar, (v) => fmtPct(v)], ["BETA", port.beta, (v) => v.toFixed(2)],
+                ["SHARPE", port.sharpe, (v) => v.toFixed(2)], ["SORTINO", port.sortino, (v) => v.toFixed(2)], ["CALMAR", port.calmar, (v) => v.toFixed(2)],
+                ["TREYNOR", isNaN(port.treynor) ? 0 : port.treynor, (v) => (isNaN(port.treynor) ? "—" : v.toFixed(2))],
+                ["OMEGA", isFinite(port.omega) ? port.omega : 0, (v) => (isFinite(port.omega) ? v.toFixed(2) : "∞")],
+                ["SKEW", port.skew, (v) => v.toFixed(2)], ["KURT (excess)", port.kurt, (v) => v.toFixed(2)], ["ULCER", port.ulcer / 100, (v) => fmtPct(v)],
+              ].map(([l, raw, fmt], i) => (
+                <div key={i} className="qt-stat" style={{ minWidth: 90 }}>
+                  <div style={{ fontSize: 9.5, color: "var(--sub)" }}>{l}</div>
+                  <div style={{ fontSize: 15, fontWeight: 600 }}><AnimatedStat value={raw} fmt={fmt} /></div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <RotatingInsights port={port} />
+
+          <div style={{ display: "flex", gap: 22, flexWrap: "wrap", padding: "4px 0" }}>
+            {TABS.map(([k, label]) => <button key={k} type="button" className={`qt-tab ${tab === k ? "on" : ""}`} onClick={() => setTab(k)}>{label}</button>)}
+          </div>
+
+          {tab === "overview" && (
+            <div key="ov">
+              <div className="qt-section">
+                <div className="qt-h">PORTFOLIO VS. MARKET</div>
+                <div className="qt-dek">solid = portfolio · dashed = simulated benchmark, indexed to 100</div>
+                <ResponsiveContainer width="100%" height={200}>
+                  <LineChart data={port.chart} margin={{ top: 5, right: 8, left: -18, bottom: 0 }}>
+                    <CartesianGrid stroke="#D9D2C4" vertical={false} />
+                    <XAxis dataKey="w" tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={{ stroke: "#D9D2C4" }} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
+                    <Tooltip contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 11, border: "1px solid #D9D2C4", background: "#FFFFFF", color: "#14201B" }} />
+                    <Line type="monotone" dataKey="price" stroke="#1F6F5C" strokeWidth={1.6} dot={false} />
+                    <Line type="monotone" dataKey="bench" stroke="#5C6B62" strokeWidth={1.2} strokeDasharray="4 3" dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="qt-section" style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 380px" }}>
+                  <div className="qt-h">ROLLING VOLATILITY (20D)</div>
+                  <ResponsiveContainer width="100%" height={170}>
+                    <LineChart data={port.chart} margin={{ top: 5, right: 8, left: -18, bottom: 0 }}>
+                      <CartesianGrid stroke="#D9D2C4" vertical={false} />
+                      <XAxis dataKey="w" tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={{ stroke: "#D9D2C4" }} tickLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={false} tickLine={false} unit="%" />
+                      <Tooltip contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 11, border: "1px solid #D9D2C4", background: "#FFFFFF", color: "#14201B" }} />
+                      <ReferenceLine y={port.annVol * 100} stroke="#9C6B24" strokeDasharray="3 3" />
+                      <Line type="monotone" dataKey="vol" stroke="#EDEAE0" strokeWidth={1.5} dot={false} connectNulls />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                <div style={{ flex: "1 1 380px" }}>
+                  <div className="qt-h">DRAWDOWN</div>
+                  <ResponsiveContainer width="100%" height={170}>
+                    <AreaChart data={port.chart} margin={{ top: 5, right: 8, left: -18, bottom: 0 }}>
+                      <CartesianGrid stroke="#D9D2C4" vertical={false} />
+                      <XAxis dataKey="w" tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={{ stroke: "#D9D2C4" }} tickLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={false} tickLine={false} unit="%" />
+                      <Tooltip contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 11, border: "1px solid #D9D2C4", background: "#FFFFFF", color: "#14201B" }} />
+                      <Area type="monotone" dataKey="dd" stroke="#A6321B" fill="#A6321B" fillOpacity={0.15} strokeWidth={1.5} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="qt-section">
+                <div className="qt-h">RETURN DISTRIBUTION</div>
+                <div className="qt-dek">252 sessions · bars beyond historical VaR95 marked</div>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={port.hist} margin={{ top: 5, right: 8, left: -18, bottom: 0 }}>
+                    <CartesianGrid stroke="#D9D2C4" vertical={false} />
+                    <XAxis dataKey="bin" tick={{ fontSize: 9, fill: "#5C6B62" }} axisLine={{ stroke: "#D9D2C4" }} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: "#5C6B62" }} axisLine={false} tickLine={false} />
+                    <Tooltip contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 11, border: "1px solid #D9D2C4", background: "#FFFFFF", color: "#14201B" }} />
+                    <Bar dataKey="count">{port.hist.map((d, i) => <Cell key={i} fill={d.isVar ? "#A6321B" : "#1F6F5C"} />)}</Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="qt-section" style={{ display: "flex", gap: 36, flexWrap: "wrap" }}>
+                <div style={{ flex: "2 1 380px" }}>
+                  <div className="qt-h">MODEL READ</div>
+                  <p style={{ fontSize: 13, lineHeight: 1.7, color: "var(--ink)" }}>
+                    Score {port.riskScore}/100 ({riskLabel(port.riskScore).toLowerCase()}). Skew of {port.skew.toFixed(2)} and excess kurtosis of {port.kurt.toFixed(2)} put
+                    the Cornish-Fisher-adjusted VaR95 at {fmtPct(port.cfVar)}, vs. {fmtPct(port.var95)} from plain historical VaR. EWMA-weighted volatility reads
+                    {" "}{fmtPct(port.ewmaVolFwd)} against {fmtPct(port.annVol)} realised. Downside beta is {isNaN(port.dBeta) ? "n/a" : port.dBeta.toFixed(2)}.
+                  </p>
+                </div>
+                <div style={{ flex: "1 1 260px" }} className="qt-note">
